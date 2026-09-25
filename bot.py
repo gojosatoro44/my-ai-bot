@@ -22,7 +22,7 @@ if not RAILWAY_PUBLIC_DOMAIN:
 # --- NEW SDK INITIALIZATION ---
 # Create the Gemini client using the new google-genai SDK
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.8-flash"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
