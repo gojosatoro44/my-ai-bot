@@ -2,7 +2,7 @@ import logging
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 
 # --- Read secrets from Railway environment variables ---
@@ -19,12 +19,10 @@ if not GEMINI_API_KEY:
 if not RAILWAY_PUBLIC_DOMAIN:
     raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN environment variable. Please generate a domain in Railway's Settings tab.")
 
-# Configure Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-
-# --- UPDATED MODEL NAME ---
-# gemini-1.5-flash was retired. We are using gemini-2.5-flash now.
-model = genai.GenerativeModel("gemini-2.5-flash")
+# --- NEW SDK INITIALIZATION ---
+# Create the Gemini client using the new google-genai SDK
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_NAME = "gemini-2.5-flash"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -39,7 +37,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     try:
-        response = model.generate_content(user_text)
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_text
+        )
         await update.message.reply_text(response.text)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -55,7 +56,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "If the text contains a question or request, respond to it. "
             "Otherwise, just return the extracted text."
         )
-        response = model.generate_content([prompt, img])
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt, img]
+        )
         await update.message.reply_text(response.text)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
