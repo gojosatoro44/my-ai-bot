@@ -11,12 +11,20 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 RAILWAY_PUBLIC_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
 PORT = int(os.environ.get("PORT", 8080))
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("Missing TELEGRAM_TOKEN or GEMINI_API_KEY environment variables.")
+# --- Validate that everything is set ---
+if not TELEGRAM_TOKEN:
+    raise ValueError("Missing TELEGRAM_TOKEN environment variable.")
+if not GEMINI_API_KEY:
+    raise ValueError("Missing GEMINI_API_KEY environment variable.")
+if not RAILWAY_PUBLIC_DOMAIN:
+    raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN environment variable. Please generate a domain in Railway's Settings tab.")
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+
+# --- UPDATED MODEL NAME ---
+# gemini-1.5-flash was retired. We are using gemini-2.5-flash now.
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -70,4 +78,4 @@ if __name__ == "__main__":
         port=PORT,
         url_path="/webhook",
         webhook_url=webhook_url,
-  )
+    )
