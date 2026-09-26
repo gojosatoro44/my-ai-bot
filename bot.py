@@ -1,4 +1,3 @@
-
 import logging
 import os
 import json
@@ -22,27 +21,41 @@ if not TELEGRAM_TOKEN: raise ValueError("Missing TELEGRAM_TOKEN.")
 if not GROQ_API_KEY: raise ValueError("Missing GROQ_API_KEY.")
 if not MONGODB_URI: raise ValueError("Missing MONGODB_URI. Please set it in Railway Variables.")
 if not RAILWAY_PUBLIC_DOMAIN: raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN.")
-if ADMIN_ID == 0: print("WARNING: ADMIN_ID is not set.")
 
-# --- Groq Client Initialization ---
-client = Groq(api_key=GROQ_API_KEY)
-VISION_MODEL = "qwen/qwen3.8-27b"
+# --- MongoDB Setup & Connection Test ---
+try:
+    mongo_client = MongoClient(MONGODB_URI)
+    # Ping the database to verify connection
+    mongo_client.admin.command('ping')
+    print("✅ MongoDB Connected Successfully!")
+except Exception as e:
+    print(f"❌ MongoDB Connection Error: {e}")
+    raise e
 
-# --- MongoDB Setup ---
-mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client["telegram_bot"]
 collection = db["data"]
 
 def load_data():
-    doc = collection.find_one({"_id": "config"})
-    if not doc:
+    try:
+        doc = collection.find_one({"_id": "config"})
+        if not doc:
+            return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": []}
+        doc.pop("_id", None)
+        return doc
+    except Exception as e:
+        print(f"Error loading data: {e}")
         return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": []}
-    doc.pop("_id", None) # Remove MongoDB's internal ID before returning
-    return doc
 
 def save_data(data):
-    data["_id"] = "config"
-    collection.replace_one({"_id": "config"}, data, upsert=True)
+    try:
+        data["_id"] = "config"
+        collection.replace_one({"_id": "config"}, data, upsert=True)
+    except Exception as e:
+        print(f"Error saving data: {e}")
+
+# --- Groq Client Initialization ---
+client = Groq(api_key=GROQ_API_KEY)
+VISION_MODEL = "qwen/qwen3.8-27b"
 
 # --- Keyboards ---
 MAIN_KEYBOARD = ReplyKeyboardMarkup([["Get Comment"]], resize_keyboard=True)
