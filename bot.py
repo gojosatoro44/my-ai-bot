@@ -1,3 +1,4 @@
+
 import logging
 import os
 import base64
@@ -18,12 +19,12 @@ if not TELEGRAM_TOKEN:
 if not GROQ_API_KEY:
     raise ValueError("Missing GROQ_API_KEY environment variable.")
 if not RAILWAY_PUBLIC_DOMAIN:
-    raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN environment variable. Please generate a domain in Railway's Settings tab.")
+    raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN environment variable.")
 
 # --- Groq Client Initialization ---
 client = Groq(api_key=GROQ_API_KEY)
 VISION_MODEL = "qwen/qwen3.8-27b"
-TEXT_MODEL = "llama-3.3-70b-versatile"
+TEXT_MODEL = "openai/gpt-oss-120b"  # <-- Updated working model
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -40,8 +41,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         completion = client.chat.completions.create(
             model=TEXT_MODEL,
-            messages=[{"role": "user", "content": user_text}],
-            temperature=0.7,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant. Keep your answers brief and direct."},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.3,  # <-- Lowered for faster, more focused replies
         )
         await update.message.reply_text(completion.choices[0].message.content)
     except Exception as e:
@@ -74,7 +78,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                 }
             ],
-            temperature=1,
+            temperature=0.3,
             max_completion_tokens=1024,
         )
         await update.message.reply_text(completion.choices[0].message.content)
