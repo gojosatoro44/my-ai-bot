@@ -12,9 +12,15 @@ from pymongo import MongoClient
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 MONGODB_URI = os.environ.get("MONGODB_URI")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 RAILWAY_PUBLIC_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
 PORT = int(os.environ.get("PORT", 8080))
+
+# --- Robust ADMIN_ID parsing ---
+try:
+    ADMIN_ID = int(os.environ.get("ADMIN_ID", "0").strip())
+except ValueError:
+    ADMIN_ID = 0
+    print("WARNING: ADMIN_ID is not a valid integer.")
 
 # --- Validate that everything is set ---
 if not TELEGRAM_TOKEN: raise ValueError("Missing TELEGRAM_TOKEN.")
@@ -24,8 +30,8 @@ if not RAILWAY_PUBLIC_DOMAIN: raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN.")
 
 # --- MongoDB Setup & Connection Test ---
 try:
-    mongo_client = MongoClient(MONGODB_URI)
-    # Ping the database to verify connection
+    # Added timeout so it doesn't hang forever if DB is unreachable
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
     print("✅ MongoDB Connected Successfully!")
 except Exception as e:
@@ -41,6 +47,11 @@ def load_data():
         if not doc:
             return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": []}
         doc.pop("_id", None)
+        # Ensure all keys exist to prevent KeyErrors on older databases
+        if "apps" not in doc: doc["apps"] = {}
+        if "history" not in doc: doc["history"] = {}
+        if "proofs" not in doc: doc["proofs"] = {}
+        if "saved_proofs" not in doc: doc["saved_proofs"] = []
         return doc
     except Exception as e:
         print(f"Error loading data: {e}")
@@ -68,6 +79,19 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+# --- Global Error Handler (Sends errors to Admin's Telegram) ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.error(msg="Exception while handling an update:", exc_info=context.error)
+    if ADMIN_ID != 0:
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"⚠️ Bot Crash Report:\n\n`{context.error}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 # --- Basic Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,21 +273,40 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Main Application Setup ---
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Add global error handler
+    app.add_error_handler(error_handler)
+
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('DTX', admin_entry), MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry), MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)],
+        entry_points=[
+            CommandHandler('DTX', admin_entry), 
+            MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), 
+            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry), 
+            MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)
+        ],
         states={
-            ADMIN_MENU: [MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)],
+            ADMIN_MENU: [
+                MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), 
+                MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)
+            ],
             ADD_APP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_app)],
             ADD_COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comments)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        # THE FIX: These fallbacks ensure the bot NEVER gets stuck
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CommandHandler('DTX', admin_entry),
+            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry)
+        ],
     )
+    
     app.add_handler(CommandHandler('start', start))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(user_app_callback, pattern="^getapp_"))
     app.add_handler(CallbackQueryHandler(proof_status_callback, pattern="^proofstatus_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_proof_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_proof_photo))
+    
     webhook_url = f"https://{RAILWAY_PUBLIC_DOMAIN}/webhook"
     print(f"Starting bot on port {PORT} with webhook {webhook_url}...")
     app.run_webhook(listen="0.0.0.0", port=PORT, url_path="/webhook", webhook_url=webhook_url)
