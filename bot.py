@@ -1,4 +1,3 @@
-
 import logging
 import os
 import base64
@@ -24,7 +23,7 @@ if not RAILWAY_PUBLIC_DOMAIN:
 # --- Groq Client Initialization ---
 client = Groq(api_key=GROQ_API_KEY)
 VISION_MODEL = "qwen/qwen3.8-27b"
-TEXT_MODEL = "openai/gpt-oss-120b"  # <-- Updated working model
+TEXT_MODEL = "openai/gpt-oss-120b"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -45,7 +44,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {"role": "system", "content": "You are a helpful assistant. Keep your answers brief and direct."},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.3,  # <-- Lowered for faster, more focused replies
+            temperature=0.3,
         )
         await update.message.reply_text(completion.choices[0].message.content)
     except Exception as e:
@@ -59,11 +58,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
 
+        # --- UPDATED PROMPT HERE ---
         prompt = (
-            "Extract all text from this image. "
-            "If the text contains a question or request, respond to it. "
-            "Otherwise, just return the extracted text."
+            "Look at this screenshot carefully. Find the name of the person who wrote the review. "
+            "Return ONLY the reviewer's name. Do not include stars, dates, or the review text. "
+            "If you cannot find a reviewer name, reply exactly with: 'No reviewer name found'."
         )
+        # ---------------------------
+
         completion = client.chat.completions.create(
             model=VISION_MODEL,
             messages=[
@@ -78,7 +80,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                 }
             ],
-            temperature=0.3,
+            temperature=0.1, # Lowered to 0.1 so it strictly follows the prompt
             max_completion_tokens=1024,
         )
         await update.message.reply_text(completion.choices[0].message.content)
