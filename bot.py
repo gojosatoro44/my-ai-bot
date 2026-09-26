@@ -2,8 +2,8 @@ import logging
 import os
 import json
 import random
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler, ConversationHandler
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler, ConversationHandler, CallbackQueryHandler
 
 # --- Read secrets from Railway environment variables ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -37,7 +37,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup([["Get Comment"]], resize_keyboard=True)
 ADMIN_KEYBOARD = ReplyKeyboardMarkup([["Add Comment"]], resize_keyboard=True)
 
 # --- Conversation States ---
-ADMIN_MENU, ADD_APP, ADD_COMMENTS, USER_APP = range(4)
+ADMIN_MENU, ADD_APP, ADD_COMMENTS = range(3)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -94,42 +94,50 @@ async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No Task Available", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     
-    # Create a keyboard with app names
-    keyboard = [[app] for app in apps]
+    # Create Inline Buttons for App Names
+    keyboard = [[InlineKeyboardButton(app, callback_data=f"getapp_{app}")] for app in apps]
     await update.message.reply_text(
         "Please select an app:", 
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return USER_APP
+    return ConversationHandler.END # We don't need a state, handled by CallbackQuery
 
-async def user_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    app_name = update.message.text.strip()
+# --- Callback Handler for Inline App Buttons ---
+async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer() # Acknowledge the button press
+    
+    app_name = query.data.replace("getapp_", "")
     user_id = str(update.effective_user.id)
     data = load_data()
-    
+
     if app_name not in data["apps"] or not data["apps"][app_name]:
-        await update.message.reply_text("No comments found for this app.", reply_markup=MAIN_KEYBOARD)
-        return ConversationHandler.END
-    
+        await query.edit_message_text("No comments found for this app.")
+        return
+
+    # Initialize user history if not exists
     if user_id not in data["history"]:
         data["history"][user_id] = {}
-    if app_name not in data["history"][user_id]:
-        data["history"][user_id][app_name] = []
     
+    # Check if user already got a comment for this app
+    if app_name in data["history"][user_id] and len(data["history"][user_id][app_name]) >= 1:
+        await query.edit_message_text("You have already received a comment for this app. You can only get 1 comment per app.")
+        return
+
     all_comments = data["apps"][app_name]
-    used_comments = data["history"][user_id][app_name]
-    available_comments = [c for c in all_comments if c not in used_comments]
+    available_comments = [c for c in all_comments if c not in data["history"][user_id].get(app_name, [])]
     
     if not available_comments:
-        await update.message.reply_text("You have already received all available comments for this app.", reply_markup=MAIN_KEYBOARD)
-        return ConversationHandler.END
-    
+        await query.edit_message_text("No more unique comments available for this app.")
+        return
+
     chosen_comment = random.choice(available_comments)
-    data["history"][user_id][app_name].append(chosen_comment)
-    save_data(data)
     
-    await update.message.reply_text(f"`{chosen_comment}`", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
-    return ConversationHandler.END
+    # Enforce exactly 1 comment per app per user
+    data["history"][user_id][app_name] = [chosen_comment] 
+    save_data(data)
+
+    await query.edit_message_text(f"Here is your comment:\n\n`{chosen_comment}`", parse_mode="Markdown")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Action cancelled.", reply_markup=MAIN_KEYBOARD)
@@ -149,16 +157,15 @@ if __name__ == "__main__":
             ADMIN_MENU: [MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry)],
             ADD_APP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_app)],
             ADD_COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comments)],
-            USER_APP: [MessageHandler(filters.TEXT & ~filters.COMMAND, user_app)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(user_app_callback, pattern="^getapp_"))
 
     # --- AI HANDLERS COMMENTED OUT ---
-    # The AI code is still in the file, but not activated for users right now.
     # app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     # app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
@@ -170,4 +177,4 @@ if __name__ == "__main__":
         port=PORT,
         url_path="/webhook",
         webhook_url=webhook_url,
-        )
+    )
