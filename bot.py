@@ -3,37 +3,37 @@ import os
 import json
 import random
 import base64
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler, ConversationHandler, CallbackQueryHandler
 from groq import Groq
 from pymongo import MongoClient
 
-# --- Read secrets from Railway environment variables ---
+# ═══════════════════════════════════════════════════
+# 👑  ROYAL BOT — POWERED BY EXCELLENCE
+# ═══════════════════════════════════════════════════
+
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 MONGODB_URI = os.environ.get("MONGODB_URI")
 RAILWAY_PUBLIC_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
 PORT = int(os.environ.get("PORT", 8080))
 
-# --- Robust ADMIN_ID parsing ---
 try:
     ADMIN_ID = int(os.environ.get("ADMIN_ID", "0").strip())
 except ValueError:
     ADMIN_ID = 0
-    print("WARNING: ADMIN_ID is not a valid integer.")
 
-# --- Validate that everything is set ---
 if not TELEGRAM_TOKEN: raise ValueError("Missing TELEGRAM_TOKEN.")
 if not GROQ_API_KEY: raise ValueError("Missing GROQ_API_KEY.")
-if not MONGODB_URI: raise ValueError("Missing MONGODB_URI. Please set it in Railway Variables.")
+if not MONGODB_URI: raise ValueError("Missing MONGODB_URI.")
 if not RAILWAY_PUBLIC_DOMAIN: raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN.")
 
-# --- MongoDB Setup & Connection Test ---
+# ─── MongoDB Realm ───
 try:
-    # Added timeout so it doesn't hang forever if DB is unreachable
     mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
-    print("✅ MongoDB Connected Successfully!")
+    print("👑 MongoDB Kingdom Connected Successfully!")
 except Exception as e:
     print(f"❌ MongoDB Connection Error: {e}")
     raise e
@@ -45,17 +45,15 @@ def load_data():
     try:
         doc = collection.find_one({"_id": "config"})
         if not doc:
-            return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": []}
+            return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": [], "users": {}, "withdrawals": []}
         doc.pop("_id", None)
-        # Ensure all keys exist to prevent KeyErrors on older databases
-        if "apps" not in doc: doc["apps"] = {}
-        if "history" not in doc: doc["history"] = {}
-        if "proofs" not in doc: doc["proofs"] = {}
+        if "users" not in doc: doc["users"] = {}
+        if "withdrawals" not in doc: doc["withdrawals"] = []
         if "saved_proofs" not in doc: doc["saved_proofs"] = []
         return doc
     except Exception as e:
         print(f"Error loading data: {e}")
-        return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": []}
+        return {"apps": {}, "history": {}, "proofs": {}, "saved_proofs": [], "users": {}, "withdrawals": []}
 
 def save_data(data):
     try:
@@ -64,91 +62,360 @@ def save_data(data):
     except Exception as e:
         print(f"Error saving data: {e}")
 
-# --- Groq Client Initialization ---
 client = Groq(api_key=GROQ_API_KEY)
 VISION_MODEL = "qwen/qwen3.8-27b"
 
-# --- Keyboards ---
-MAIN_KEYBOARD = ReplyKeyboardMarkup([["Get Comment"]], resize_keyboard=True)
-ADMIN_KEYBOARD = ReplyKeyboardMarkup([["Add Comment"], ["Saved Proof"]], resize_keyboard=True)
-
-# --- Conversation States ---
-ADMIN_MENU, ADD_APP, ADD_COMMENTS = range(3)
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+# ─── Royal Keyboards ───
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [["💎 Get Comment", "👤 My Profile"], ["💰 Withdrawal"]],
+    resize_keyboard=True
 )
 
-# --- Global Error Handler (Sends errors to Admin's Telegram) ---
+ADMIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["✍️ Add Comment", "📜 Saved Proof"],
+        ["📊 Royal Stats", "📢 Broadcast"],
+        ["⚖️ Add/Remove Bal"]
+    ],
+    resize_keyboard=True
+)
+
+# ─── States ───
+(ADMIN_MENU, ADD_APP, ADD_COMMENTS, BROADCAST_MSG, ADMIN_BAL_ID, ADMIN_BAL_AMT,
+ WITHDRAW_METHOD, WITHDRAW_UPI, WITHDRAW_AMT) = range(9)
+
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+# ─── Decorative Lines ───
+LINE = "━━━━━━━━━━━━━━━━━━━━━━"
+SMALL_LINE = "━━━━━━━━━━━━━"
+
+# ─── Error Handler ───
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(msg="Exception while handling an update:", exc_info=context.error)
     if ADMIN_ID != 0:
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"⚠️ Bot Crash Report:\n\n`{context.error}`",
+                text=f"⚠️ *Royal Alert — System Interruption*\n{SMALL_LINE}\n`{context.error}`",
                 parse_mode="Markdown"
             )
         except Exception:
             pass
 
-# --- Basic Handlers ---
+# ─── /start ───
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_proof"] = False
     context.user_data["proof_app"] = None
-    await update.message.reply_text("Welcome! Use the button below to get a comment.", reply_markup=MAIN_KEYBOARD)
+    name = update.effective_user.first_name or "Honored Guest"
+    text = (
+        f"👑 *Welcome, {name}*\n"
+        f"{LINE}\n\n"
+        f"✨ You have entered the *Royal Task Chamber*.\n"
+        f"💎 Complete tasks elegantly. Earn rewards gracefully.\n\n"
+        f"🎯 *Use the Royal Menu below to begin your journey.*"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
-# --- Admin Panel Logic ---
+# ═══════════════════════════════════════════════════
+# 👑  ROYAL ADMIN CHAMBER
+# ═══════════════════════════════════════════════════
+
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("You are not authorized to use this command.")
+        await update.message.reply_text("🚫 *Access Denied* — This chamber is reserved for the Crown.", parse_mode="Markdown")
         return ConversationHandler.END
-    await update.message.reply_text("Admin Panel Opened. What would you like to do?", reply_markup=ADMIN_KEYBOARD)
+    text = (
+        f"👑 *Royal Admin Chamber*\n"
+        f"{LINE}\n\n"
+        f"Welcome back, Your Majesty. 🎩\n"
+        f"Your commands await."
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
+# ─── Add Comment Flow ───
 async def add_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please enter the App Name:")
+    await update.message.reply_text("🏷️ *Please enter the App Name:*", parse_mode="Markdown")
     return ADD_APP
 
 async def add_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    app_name = update.message.text.strip()
-    context.user_data["temp_app_name"] = app_name
-    await update.message.reply_text(f"App Name saved: {app_name}.\nNow send the comments, separated by commas:")
+    context.user_data["temp_app_name"] = update.message.text.strip()
+    text = (
+        f"✅ App Registered: *{context.user_data['temp_app_name']}*\n"
+        f"{SMALL_LINE}\n"
+        f"✍️ Now send the comments, separated by commas.\n"
+        f"📝 _Example:_ Comment1,Comment2,Comment3"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
     return ADD_COMMENTS
 
 async def add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    comments_text = update.message.text
-    comments_list = [c.strip() for c in comments_text.split(",") if c.strip()]
+    comments_list = [c.strip() for c in update.message.text.split(",") if c.strip()]
     app_name = context.user_data.get("temp_app_name")
     data = load_data()
     if app_name not in data["apps"]: data["apps"][app_name] = []
     data["apps"][app_name].extend(comments_list)
     save_data(data)
-    await update.message.reply_text("User Comment Added Successful", reply_markup=MAIN_KEYBOARD)
+    text = (
+        f"💎 *Comments Enshrined Successfully*\n"
+        f"{SMALL_LINE}\n"
+        f"📱 App: *{app_name}*\n"
+        f"📝 Comments Added: *{len(comments_list)}*"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
+# ─── Saved Proofs ───
 async def show_saved_proofs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     proofs = data.get("saved_proofs", [])
     if not proofs:
-        await update.message.reply_text("No saved proofs yet.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("📜 *The Royal Ledger is empty.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
-    text = "📋 **Saved Proofs**\n\n"
+    text = f"📜 *Royal Proof Ledger* — Last 10\n{LINE}\n\n"
     for i, p in enumerate(proofs[-10:], 1):
-        text += f"{i}. App: {p['app_name']}\n   Reviewer: {p['reviewer_name']}\n   User ID: {p['user_id']}\n   Username: @{p.get('username', 'N/A')}\n\n"
-    await update.message.reply_text(text, reply_markup=ADMIN_KEYBOARD)
+        status_emoji = {"approved": "✅", "rejected": "❌", "pending": "⏳"}.get(p["status"], "❓")
+        text += (
+            f"{status_emoji} *{i}. {p['app_name']}*\n"
+            f"   👤 Reviewer: {p['reviewer_name']}\n"
+            f"   📱 User: @{p.get('username', 'N/A')}\n"
+            f"   🆔 ID: `{p['user_id']}`\n\n"
+        )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- User Get Comment Logic ---
+# ─── Stats ───
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    users = data.get("users", {})
+    proofs = data.get("saved_proofs", [])
+    approved = sum(1 for p in proofs if p["status"] == "approved")
+    rejected = sum(1 for p in proofs if p["status"] == "rejected")
+    pending = sum(1 for p in proofs if p["status"] == "pending")
+    total_balance = sum(u.get("balance", 0) for u in users.values())
+    total_withdrawn = sum(w["amount"] for w in data.get("withdrawals", []) if w.get("status") == "approved")
+
+    text = (
+        f"📊 *Royal Kingdom Statistics*\n"
+        f"{LINE}\n\n"
+        f"👥 *Registered Subjects:* {len(users)}\n"
+        f"📝 *Total Proofs:* {len(proofs)}\n\n"
+        f"✅ *Approved:* {approved}\n"
+        f"❌ *Rejected:* {rejected}\n"
+        f"⏳ *Pending:* {pending}\n\n"
+        f"{SMALL_LINE}\n"
+        f"💰 *Active Balance:* ₹{total_balance:.2f}\n"
+        f"💸 *Total Withdrawn:* ₹{total_withdrawn:.2f}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+    return ADMIN_MENU
+
+# ─── Broadcast ───
+async def broadcast_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📢 *Send the royal decree (message) to broadcast:*", parse_mode="Markdown")
+    return BROADCAST_MSG
+
+async def broadcast_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message.text
+    data = load_data()
+    users = list(data.get("users", {}).keys())
+    await update.message.reply_text(f"⏳ *Dispatching to {len(users)} subjects...*", parse_mode="Markdown")
+    count = 0
+    royal_msg = f"📢 *Royal Announcement*\n{LINE}\n\n{msg}"
+    for user_id in users:
+        try:
+            await context.bot.send_message(chat_id=int(user_id), text=royal_msg, parse_mode="Markdown")
+            count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    await update.message.reply_text(f"✅ *Royal Decree Delivered to {count} subjects.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+    return ADMIN_MENU
+
+# ─── Add/Remove Balance ───
+async def admin_bal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚖️ *Send the User ID to add/remove balance:*", parse_mode="Markdown")
+    return ADMIN_BAL_ID
+
+async def admin_bal_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bal_user_id"] = update.message.text.strip()
+    await update.message.reply_text("💵 *Send amount (e.g., 50 to add, -50 to remove):*", parse_mode="Markdown")
+    return ADMIN_BAL_AMT
+
+async def admin_bal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ *Invalid amount. Operation cancelled.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+        return ADMIN_MENU
+    user_id = context.user_data.get("bal_user_id")
+    data = load_data()
+    if user_id not in data["users"]:
+        data["users"][user_id] = {"balance": 0.0, "total_tasks": 0, "accepted": 0, "rejected": 0, "pending": 0}
+    data["users"][user_id]["balance"] += amount
+    save_data(data)
+    action = "Added to" if amount > 0 else "Removed from"
+    text = (
+        f"⚖️ *Royal Treasury Updated*\n"
+        f"{SMALL_LINE}\n"
+        f"👤 User ID: `{user_id}`\n"
+        f"💵 Amount: ₹{abs(amount):.2f} {action} balance\n"
+        f"💰 *New Balance:* ₹{data['users'][user_id]['balance']:.2f}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+    return ADMIN_MENU
+
+# ═══════════════════════════════════════════════════
+# 👤  USER PROFILE
+# ═══════════════════════════════════════════════════
+
+async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Honored Guest"
+    data = load_data()
+    user = data["users"].get(user_id, {"balance": 0.0, "total_tasks": 0, "accepted": 0, "rejected": 0, "pending": 0})
+
+    text = (
+        f"👤 *Royal Profile*\n"
+        f"{LINE}\n\n"
+        f"🎩 *Name:* {user_name}\n"
+        f"🆔 *ID:* `{user_id}`\n"
+        f"💰 *Balance:* ₹{user.get('balance', 0.0):.2f}\n\n"
+        f"{SMALL_LINE}\n"
+        f"📊 *Task Chronicles*\n"
+        f"🎯 Total Tasks: *{user.get('total_tasks', 0)}*\n"
+        f"✅ Accepted: *{user.get('accepted', 0)}*\n"
+        f"❌ Rejected: *{user.get('rejected', 0)}*\n"
+        f"⏳ Pending: *{user.get('pending', 0)}*\n"
+        f"{SMALL_LINE}\n\n"
+        f"✨ _Continue thy noble work._"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+
+# ═══════════════════════════════════════════════════
+# 💰  WITHDRAWAL SYSTEM
+# ═══════════════════════════════════════════════════
+
+async def withdrawal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    data = load_data()
+    user = data["users"].get(user_id, {"balance": 0.0})
+    balance = user.get("balance", 0.0)
+
+    if balance < 10:
+        text = (
+            f"💰 *Royal Treasury*\n"
+            f"{SMALL_LINE}\n"
+            f"❌ Minimum withdrawal is ₹10.\n"
+            f"💵 Your balance: ₹{balance:.2f}\n\n"
+            f"✨ _Complete more tasks to unlock withdrawal._"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
+    text = (
+        f"💰 *Royal Treasury*\n"
+        f"{SMALL_LINE}\n"
+        f"💵 Available: ₹{balance:.2f}\n\n"
+        f"🏦 *Choose your withdrawal method:*"
+    )
+    keyboard = [[
+        InlineKeyboardButton("💳 UPI", callback_data="withdraw_upi"),
+        InlineKeyboardButton("🎗️ VSV", callback_data="withdraw_vsv")
+    ]]
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return WITHDRAW_METHOD
+
+async def withdraw_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "withdraw_upi":
+        await query.edit_message_text("💳 *Please send your UPI ID:*", parse_mode="Markdown")
+        return WITHDRAW_UPI
+    elif query.data == "withdraw_vsv":
+        text = (
+            f"🎗️ *VSV Withdrawal*\n"
+            f"{SMALL_LINE}\n"
+            f"Kindly message the Royal Owner directly:\n"
+            f"👑 @dtxzahid"
+        )
+        await query.edit_message_text(text, parse_mode="Markdown")
+        return ConversationHandler.END
+
+async def withdraw_upi_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["withdraw_upi"] = update.message.text.strip()
+    await update.message.reply_text("💵 *Now send the amount to withdraw (Min ₹10):*", parse_mode="Markdown")
+    return WITHDRAW_AMT
+
+async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ *Invalid amount. Cancelled.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
+    if amount < 10:
+        await update.message.reply_text("❌ *Minimum withdrawal is ₹10.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
+    user_id = str(update.effective_user.id)
+    data = load_data()
+    user = data["users"].get(user_id, {"balance": 0.0})
+
+    if amount > user.get("balance", 0.0):
+        await update.message.reply_text("❌ *Insufficient Royal Treasury balance.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
+    data["users"][user_id]["balance"] -= amount
+    upi_id = context.user_data.get("withdraw_upi")
+
+    data["withdrawals"].append({
+        "user_id": user_id,
+        "username": update.effective_user.username or "N/A",
+        "amount": amount,
+        "method": "UPI",
+        "upi_id": upi_id,
+        "status": "pending"
+    })
+    save_data(data)
+
+    admin_text = (
+        f"💰 *Royal Withdrawal Request*\n"
+        f"{LINE}\n\n"
+        f"👤 User: @{update.effective_user.username or 'N/A'}\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"💵 Amount: ₹{amount:.2f}\n"
+        f"🏦 Method: UPI\n"
+        f"📧 UPI ID: `{upi_id}`"
+    )
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Error sending withdrawal to admin: {e}")
+
+    text = (
+        f"✅ *Withdrawal Request Submitted*\n"
+        f"{SMALL_LINE}\n"
+        f"Your request has been sent to the Crown for approval.\n"
+        f"✨ _Await thy royal blessing._"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
+# ═══════════════════════════════════════════════════
+# 💎  USER — GET COMMENT
+# ═══════════════════════════════════════════════════
+
 async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     apps = list(data.get("apps", {}).keys())
     if not apps:
-        await update.message.reply_text("No Task Available", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📭 *No tasks available at this moment.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    keyboard = [[InlineKeyboardButton(app, callback_data=f"getapp_{app}")] for app in apps]
-    await update.message.reply_text("Please select an app:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton(f"💎 {app}", callback_data=f"getapp_{app}")] for app in apps]
+    text = f"💎 *Royal Task Chamber*\n{SMALL_LINE}\n\n✨ _Select an app to receive your comment:_"
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
 async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,156 +424,79 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app_name = query.data.replace("getapp_", "")
     user_id = str(update.effective_user.id)
     data = load_data()
+
     if app_name not in data["apps"] or not data["apps"][app_name]:
-        await query.edit_message_text("No comments found for this app.")
+        await query.edit_message_text("📭 *No comments found for this app.*", parse_mode="Markdown")
         return
+
     if user_id not in data["history"]: data["history"][user_id] = {}
     if app_name in data["history"][user_id] and len(data["history"][user_id][app_name]) >= 1:
-        await query.edit_message_text("You have already received a comment for this app. You can only get 1 comment per app.")
+        await query.edit_message_text(
+            "👑 *Royal Notice*\n"
+            "━━━━━━━━━━━━━\n\n"
+            "You have already received a comment for this app.\n"
+            "✨ _One comment per app, per subject._",
+            parse_mode="Markdown"
+        )
         return
-    all_comments = data["apps"][app_name]
-    available_comments = [c for c in all_comments if c not in data["history"][user_id].get(app_name, [])]
-    if not available_comments:
-        await query.edit_message_text("No more unique comments available for this app.")
+
+    available = [c for c in data["apps"][app_name] if c not in data["history"][user_id].get(app_name, [])]
+    if not available:
+        await query.edit_message_text("📭 *No more unique comments available.*", parse_mode="Markdown")
         return
-    chosen_comment = random.choice(available_comments)
-    data["history"][user_id][app_name] = [chosen_comment]
+
+    chosen = random.choice(available)
+    data["history"][user_id][app_name] = [chosen]
     save_data(data)
-    await query.edit_message_text(f"Here is your comment:\n\n`{chosen_comment}`", parse_mode="Markdown")
-    await context.bot.send_message(chat_id=user_id, text="Please Share Screenshot Of Review To Us 📸")
+
+    comment_text = (
+        f"💎 *Your Royal Comment*\n"
+        f"{LINE}\n\n"
+        f"`{chosen}`\n\n"
+        f"{SMALL_LINE}\n"
+        f"✨ _Tap the comment above to copy it._"
+    )
+    await query.edit_message_text(comment_text, parse_mode="Markdown")
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"📸 *Please share a screenshot of your review.*\n"
+            f"{SMALL_LINE}\n"
+            f"👑 _Awaiting thy proof._"
+        ),
+        parse_mode="Markdown"
+    )
     context.user_data["awaiting_proof"] = True
     context.user_data["proof_app"] = app_name
 
-# --- Proof Handling Logic ---
+# ═══════════════════════════════════════════════════
+# 📸  PROOF HANDLING
+# ═══════════════════════════════════════════════════
+
 async def handle_proof_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_proof"):
-        await update.message.reply_text("⚠️ Only proof is accepted. Please send the screenshot.")
+        await update.message.reply_text(
+            "⚠️ *Only screenshots are accepted.*\n"
+            "━━━━━━━━━━━━━\n"
+            "📸 _Please send the proof image._",
+            parse_mode="Markdown"
+        )
         return
 
 async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_proof"):
         photo_file = await update.message.photo[-1].get_file()
-        app_name = context.user_data.get("proof_app", "Unknown App")
+        app_name = context.user_data.get("proof_app", "Unknown")
         user = update.effective_user
         user_id = str(user.id)
         data = load_data()
 
         if user_id in data["proofs"] and app_name in data["proofs"][user_id]:
-            await update.message.reply_text("❌ You have already submitted a proof for this app. You can only submit one proof per app.\n\nIf you uploaded the wrong screenshot, please contact: @dtxzahid", reply_markup=MAIN_KEYBOARD)
-            context.user_data["awaiting_proof"] = False
-            context.user_data["proof_app"] = None
-            return
-
-        await update.message.reply_text("⏳ Verifying your proof with AI. Please wait...")
-        file_path = "temp_proof.jpg"
-        await photo_file.download_to_drive(file_path)
-        try:
-            with open(file_path, "rb") as image_file:
-                base64_image = base64.b64encode(image_file.read()).decode("utf-8")
-            chosen_comment = data["history"][user_id][app_name][0]
-            prompt = f"""
-            Analyze this screenshot carefully.
-            1. Does it show a review for the app "{app_name}"?
-            2. Does the review text match or contain this exact comment: "{chosen_comment}"?
-            3. What is the name of the reviewer?
-            Reply STRICTLY in this JSON format, without any markdown or extra text:
-            {{
-              "app_match": true or false,
-              "comment_match": true or false,
-              "reviewer_name": "extracted name here"
-            }}
-            """
-            completion = client.chat.completions.create(
-                model=VISION_MODEL,
-                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}],
-                temperature=0.1,
-                max_completion_tokens=256,
+            await update.message.reply_text(
+                "❌ *Proof already submitted for this app.*\n"
+                "━━━━━━━━━━━━━\n"
+                "Kindly contact the Crown: 👑 @dtxzahid",
+                parse_mode="Markdown",
+                reply_markup=MAIN_KEYBOARD
             )
-            response_text = completion.choices[0].message.content
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            result = json.loads(response_text)
-            if not result.get("app_match") or not result.get("comment_match"):
-                await update.message.reply_text("❌ Proof Rejected automatically.\n\nThe app name or comment in your screenshot does not match our records.\nPlease contact @dtxzahid if you think this is a mistake.", reply_markup=MAIN_KEYBOARD)
-                context.user_data["awaiting_proof"] = False
-                context.user_data["proof_app"] = None
-                return
-            reviewer_name = result.get("reviewer_name", "Unknown")
-            if user_id not in data["proofs"]: data["proofs"][user_id] = {}
-            data["proofs"][user_id][app_name] = True
-            data["saved_proofs"].append({"app_name": app_name, "reviewer_name": reviewer_name, "user_id": user_id, "username": user.username or "N/A", "file_id": photo_file.file_id})
-            save_data(data)
-            admin_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"proofstatus_approve_{user_id}_{app_name}"), InlineKeyboardButton("❌ Reject", callback_data=f"proofstatus_reject_{user_id}_{app_name}")]])
-            try:
-                await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo_file.file_id, caption=f"📥 New Proof Received\n\n👤 User: {user.first_name} (@{user.username})\n🆔 ID: {user.id}\n📱 App: {app_name}\n🔍 Reviewer Name (AI): {reviewer_name}", reply_markup=admin_keyboard)
-            except Exception as e:
-                print(f"Error sending proof to admin: {e}")
-            await update.message.reply_text("Proof Submitted Successfully! Thanks for your effort. This proof has been sent to our owner for verification. After verification, you will receive a notification in the bot.\n\nNote: Uploading fake/meaningless screenshots may lead to an account ban.", reply_markup=MAIN_KEYBOARD)
-        except Exception as e:
-            print(f"AI Verification Error: {e}")
-            await update.message.reply_text("❌ Error verifying proof. Please try again later.", reply_markup=MAIN_KEYBOARD)
-        finally:
-            if os.path.exists(file_path): os.remove(file_path)
-        context.user_data["awaiting_proof"] = False
-        context.user_data["proof_app"] = None
-
-# --- Admin Proof Review Logic ---
-async def proof_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if update.effective_user.id != ADMIN_ID:
-        await query.answer("Only the owner can do this.", show_alert=True)
-        return
-    await query.answer()
-    parts = query.data.split("_")
-    action, user_id, app_name = parts[1], int(parts[2]), parts[3]
-    if action == "approve":
-        await context.bot.send_message(chat_id=user_id, text=f"✅ Your proof for {app_name} has been APPROVED! Thank you for your effort.", reply_markup=MAIN_KEYBOARD)
-        await query.edit_message_caption(caption=f"✅ Proof for {app_name} from user {user_id} has been APPROVED.")
-    elif action == "reject":
-        await context.bot.send_message(chat_id=user_id, text=f"❌ Your proof for {app_name} has been REJECTED. Please contact @dtxzahid if you think this is a mistake.", reply_markup=MAIN_KEYBOARD)
-        await query.edit_message_caption(caption=f"❌ Proof for {app_name} from user {user_id} has been REJECTED.")
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Action cancelled.", reply_markup=MAIN_KEYBOARD)
-    return ConversationHandler.END
-
-# --- Main Application Setup ---
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # Add global error handler
-    app.add_error_handler(error_handler)
-
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler('DTX', admin_entry), 
-            MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), 
-            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry), 
-            MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)
-        ],
-        states={
-            ADMIN_MENU: [
-                MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry), 
-                MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs)
-            ],
-            ADD_APP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_app)],
-            ADD_COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comments)],
-        },
-        # THE FIX: These fallbacks ensure the bot NEVER gets stuck
-        fallbacks=[
-            CommandHandler('cancel', cancel),
-            CommandHandler('DTX', admin_entry),
-            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry)
-        ],
-    )
-    
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(user_app_callback, pattern="^getapp_"))
-    app.add_handler(CallbackQueryHandler(proof_status_callback, pattern="^proofstatus_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_proof_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_proof_photo))
-    
-    webhook_url = f"https://{RAILWAY_PUBLIC_DOMAIN}/webhook"
-    print(f"Starting bot on port {PORT} with webhook {webhook_url}...")
-    app.run_webhook(listen="0.0.0.0", port=PORT, url_path="/webhook", webhook_url=webhook_url)
+            c
