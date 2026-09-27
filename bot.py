@@ -46,9 +46,9 @@ DEFAULTS = {
     "users": {}, "withdrawals": [], "banned_users": [], "rejections": [],
     "used_screenshots": [], "pending_proofs": {}, "force_join_channel": None,
     "attempts": {},
-    "comment_usage": {},   # NEW: rotation tracker
-    "last_request": {},    # NEW: rate limiting
-    "auto_ban": {}         # NEW: auto-ban tracker
+    "comment_usage": {},
+    "last_request": {},
+    "auto_ban": {}
 }
 
 def load_data():
@@ -375,7 +375,6 @@ async def show_saved_proofs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- Stats with Pending Tasks counter (Feature 1) ---
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     users = data.get("users", {})
@@ -385,8 +384,6 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rejected = len(rejections)
     total_balance = sum(u.get("balance", 0) for u in users.values())
     total_withdrawn = sum(w.get("amount", 0) for w in data.get("withdrawals", []) if w.get("status") == "approved")
-
-    # Pending active tasks
     pending_count = sum(len(v) for v in data.get("pending_proofs", {}).values())
 
     text = (
@@ -495,7 +492,7 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_MENU
 
 # ═══════════════════════════════════════════════════
-#   PROFILE / HISTORY (Hindi)
+#   PROFILE / HISTORY
 # ═══════════════════════════════════════════════════
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -670,7 +667,7 @@ async def withdrawal_status_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text(f"❌ Rejected. ₹{target['amount']:.2f} refund {uid}.")
 
 # ═══════════════════════════════════════════════════
-#   GET COMMENT (Hindi + Rate limit + Rotation)
+#   GET COMMENT  (with stale history fix)
 # ═══════════════════════════════════════════════════
 
 async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -682,7 +679,6 @@ async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Aap ban ho chuke ho.")
         return ConversationHandler.END
 
-    # Auto-ban check
     hrs = auto_ban_hours_left(data, uid)
     if hrs > 0:
         await update.message.reply_text(
@@ -710,7 +706,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     data = load_data()
 
-    # Rate limit (Feature 5)
+    # Rate limit
     last = data.setdefault("last_request", {})
     now = time.time()
     if uid in last and now - last[uid] < 120:
@@ -735,19 +731,30 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in data["history"]:
         data["history"][uid] = {}
 
+    # ═══ FIX: Check if history entry is stale ═══
     if app_name in data["history"][uid] and data["history"][uid][app_name]:
-        await query.edit_message_text(
-            "⚠️ Aapne is app ka comment already le liya hai.\n\n"
-            "Aur comment chahiye toh contact karo: @DTXZAHID"
-        )
-        return
+        has_pending = uid in data.get("pending_proofs", {}) and app_name in data["pending_proofs"].get(uid, {})
+        has_submitted = uid in data.get("proofs", {}) and app_name in data["proofs"].get(uid, {})
+
+        if not has_pending and not has_submitted:
+            # Stale entry — clear it and continue
+            del data["history"][uid][app_name]
+            if "attempts" in data and uid in data["attempts"]:
+                data["attempts"][uid].pop(app_name, None)
+            save_data(data)
+        else:
+            await query.edit_message_text(
+                "⚠️ Aapne is app ka comment already le liya hai.\n\n"
+                "Aur comment chahiye toh contact karo: @DTXZAHID"
+            )
+            return
 
     available = [c for c in data["apps"][app_name] if c not in data["history"][uid].get(app_name, [])]
     if not available:
         await query.edit_message_text("📭 Aur unique comment available nahi hai.")
         return
 
-    # ⬇️ FEATURE 7: Comment Rotation (lowest usage first)
+    # Comment rotation
     usage = data.setdefault("comment_usage", {}).setdefault(app_name, {})
     min_usage = min(usage.get(c, 0) for c in available)
     lowest_used = [c for c in available if usage.get(c, 0) == min_usage]
@@ -756,12 +763,10 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data["history"][uid][app_name] = [chosen]
 
-    # Initialize attempts
     if "attempts" not in data: data["attempts"] = {}
     if uid not in data["attempts"]: data["attempts"][uid] = {}
     data["attempts"][uid][app_name] = 3
 
-    # Pending proof for timeout
     if "pending_proofs" not in data: data["pending_proofs"] = {}
     if uid not in data["pending_proofs"]: data["pending_proofs"][uid] = {}
     data["pending_proofs"][uid][app_name] = {
@@ -769,9 +774,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "timestamp": now
     }
 
-    # Update rate limit timestamp
     last[uid] = now
-
     save_data(data)
 
     await query.edit_message_text(
@@ -945,7 +948,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         comment_matched = result.get("comment_match", False)
 
-        # ═════ REJECTED PATH ═════
+        # REJECTED
         if not comment_matched:
             if "attempts" not in data: data["attempts"] = {}
             if uid not in data["attempts"]: data["attempts"][uid] = {}
@@ -976,9 +979,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"{remaining} Attempts Baaki Hain\n"
                     f"Dobara Screenshot Bhejo"
                 )
-                # Keep awaiting_proof = True
             else:
-                # All attempts over — check auto-ban (Feature 4)
                 auto_ban = data.setdefault("auto_ban", {})
                 if uid not in auto_ban:
                     auto_ban[uid] = {"failed_apps": [], "banned_until": None}
@@ -987,7 +988,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
                 banned_now = False
                 if len(auto_ban[uid]["failed_apps"]) >= 3:
-                    auto_ban[uid]["banned_until"] = time.time() + 86400  # 24h
+                    auto_ban[uid]["banned_until"] = time.time() + 86400
                     auto_ban[uid]["failed_apps"] = []
                     banned_now = True
 
@@ -1022,7 +1023,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 context.user_data["awaiting_proof"] = False
             return
 
-        # ═════ VERIFIED PATH ═════
+        # VERIFIED
         reviewer_name = result.get("reviewer_name", "Unknown")
 
         if uid not in data["users"]:
@@ -1049,7 +1050,6 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "timestamp": time.time()
         })
 
-        # Reset auto-ban failure streak on success
         auto_ban = data.setdefault("auto_ban", {})
         if uid in auto_ban:
             auto_ban[uid]["failed_apps"] = []
