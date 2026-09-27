@@ -10,7 +10,7 @@ from groq import Groq
 from pymongo import MongoClient
 
 # ═══════════════════════════════════════════════════
-# 👑  ROYAL BOT — POWERED BY EXCELLENCE
+#  🤖  AI TELEGRAM BOT
 # ═══════════════════════════════════════════════════
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -29,11 +29,11 @@ if not GROQ_API_KEY: raise ValueError("Missing GROQ_API_KEY.")
 if not MONGODB_URI: raise ValueError("Missing MONGODB_URI.")
 if not RAILWAY_PUBLIC_DOMAIN: raise ValueError("Missing RAILWAY_PUBLIC_DOMAIN.")
 
-# ─── MongoDB Realm ───
+# ─── MongoDB Connection ───
 try:
     mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
-    print("👑 MongoDB Kingdom Connected Successfully!")
+    print("✅ MongoDB Connected Successfully!")
 except Exception as e:
     print(f"❌ MongoDB Connection Error: {e}")
     raise e
@@ -65,16 +65,16 @@ def save_data(data):
 client = Groq(api_key=GROQ_API_KEY)
 VISION_MODEL = "qwen/qwen3.8-27b"
 
-# ─── Royal Keyboards ───
+# ─── Keyboards (Original Names + Emojis) ───
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [["💎 Get Comment", "👤 My Profile"], ["💰 Withdrawal"]],
+    [["💬 Get Comment", "👤 My Profile"], ["💰 Withdrawal"]],
     resize_keyboard=True
 )
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["✍️ Add Comment", "📜 Saved Proof"],
-        ["📊 Royal Stats", "📢 Broadcast"],
+        ["📊 Stats", "📢 Broadcast"],
         ["⚖️ Add/Remove Bal"]
     ],
     resize_keyboard=True
@@ -97,7 +97,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"⚠️ *Royal Alert — System Interruption*\n{SMALL_LINE}\n`{context.error}`",
+                text=f"⚠️ *Bot Error*\n{SMALL_LINE}\n`{context.error}`",
                 parse_mode="Markdown"
             )
         except Exception:
@@ -107,29 +107,28 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_proof"] = False
     context.user_data["proof_app"] = None
-    name = update.effective_user.first_name or "Honored Guest"
+    name = update.effective_user.first_name or "User"
     text = (
-        f"👑 *Welcome, {name}*\n"
+        f"👋 *Welcome, {name}!*\n"
         f"{LINE}\n\n"
-        f"✨ You have entered the *Royal Task Chamber*.\n"
-        f"💎 Complete tasks elegantly. Earn rewards gracefully.\n\n"
-        f"🎯 *Use the Royal Menu below to begin your journey.*"
+        f"✨ Complete tasks and earn rewards.\n"
+        f"🎯 Use the buttons below to get started."
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 # ═══════════════════════════════════════════════════
-# 👑  ROYAL ADMIN CHAMBER
+#  🔐  ADMIN PANEL
 # ═══════════════════════════════════════════════════
 
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("🚫 *Access Denied* — This chamber is reserved for the Crown.", parse_mode="Markdown")
+        await update.message.reply_text("🚫 *Access Denied* — Admin only.", parse_mode="Markdown")
         return ConversationHandler.END
     text = (
-        f"👑 *Royal Admin Chamber*\n"
+        f"🔐 *Admin Panel*\n"
         f"{LINE}\n\n"
-        f"Welcome back, Your Majesty. 🎩\n"
-        f"Your commands await."
+        f"Welcome back, Admin! 👋\n"
+        f"Select an option below."
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
@@ -142,7 +141,7 @@ async def add_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["temp_app_name"] = update.message.text.strip()
     text = (
-        f"✅ App Registered: *{context.user_data['temp_app_name']}*\n"
+        f"✅ App Name Saved: *{context.user_data['temp_app_name']}*\n"
         f"{SMALL_LINE}\n"
         f"✍️ Now send the comments, separated by commas.\n"
         f"📝 _Example:_ Comment1,Comment2,Comment3"
@@ -158,7 +157,7 @@ async def add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["apps"][app_name].extend(comments_list)
     save_data(data)
     text = (
-        f"💎 *Comments Enshrined Successfully*\n"
+        f"💎 *Comments Added Successfully*\n"
         f"{SMALL_LINE}\n"
         f"📱 App: *{app_name}*\n"
         f"📝 Comments Added: *{len(comments_list)}*"
@@ -166,14 +165,14 @@ async def add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
-# ─── Saved Proofs ───
+# ─── Saved Proof ───
 async def show_saved_proofs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     proofs = data.get("saved_proofs", [])
     if not proofs:
-        await update.message.reply_text("📜 *The Royal Ledger is empty.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("📜 *No saved proofs yet.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
-    text = f"📜 *Royal Proof Ledger* — Last 10\n{LINE}\n\n"
+    text = f"📜 *Saved Proofs* — Last 10\n{LINE}\n\n"
     for i, p in enumerate(proofs[-10:], 1):
         status_emoji = {"approved": "✅", "rejected": "❌", "pending": "⏳"}.get(p["status"], "❓")
         text += (
@@ -197,9 +196,9 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_withdrawn = sum(w["amount"] for w in data.get("withdrawals", []) if w.get("status") == "approved")
 
     text = (
-        f"📊 *Royal Kingdom Statistics*\n"
+        f"📊 *Statistics*\n"
         f"{LINE}\n\n"
-        f"👥 *Registered Subjects:* {len(users)}\n"
+        f"👥 *Total Users:* {len(users)}\n"
         f"📝 *Total Proofs:* {len(proofs)}\n\n"
         f"✅ *Approved:* {approved}\n"
         f"❌ *Rejected:* {rejected}\n"
@@ -213,24 +212,24 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Broadcast ───
 async def broadcast_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📢 *Send the royal decree (message) to broadcast:*", parse_mode="Markdown")
+    await update.message.reply_text("📢 *Send the message you want to broadcast to all users:*", parse_mode="Markdown")
     return BROADCAST_MSG
 
 async def broadcast_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text
     data = load_data()
     users = list(data.get("users", {}).keys())
-    await update.message.reply_text(f"⏳ *Dispatching to {len(users)} subjects...*", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ *Sending to {len(users)} users...*", parse_mode="Markdown")
     count = 0
-    royal_msg = f"📢 *Royal Announcement*\n{LINE}\n\n{msg}"
+    broadcast_text = f"📢 *Announcement*\n{LINE}\n\n{msg}"
     for user_id in users:
         try:
-            await context.bot.send_message(chat_id=int(user_id), text=royal_msg, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=int(user_id), text=broadcast_text, parse_mode="Markdown")
             count += 1
             await asyncio.sleep(0.05)
         except Exception:
             pass
-    await update.message.reply_text(f"✅ *Royal Decree Delivered to {count} subjects.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+    await update.message.reply_text(f"✅ *Broadcast sent to {count} users.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
 # ─── Add/Remove Balance ───
@@ -240,14 +239,14 @@ async def admin_bal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_bal_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bal_user_id"] = update.message.text.strip()
-    await update.message.reply_text("💵 *Send amount (e.g., 50 to add, -50 to remove):*", parse_mode="Markdown")
+    await update.message.reply_text("💵 *Send amount.*\n_Positive to add (e.g., 50), negative to remove (e.g., -50)._", parse_mode="Markdown")
     return ADMIN_BAL_AMT
 
 async def admin_bal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("❌ *Invalid amount. Operation cancelled.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("❌ *Invalid amount. Cancelled.*", parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
     user_id = context.user_data.get("bal_user_id")
     data = load_data()
@@ -257,44 +256,44 @@ async def admin_bal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(data)
     action = "Added to" if amount > 0 else "Removed from"
     text = (
-        f"⚖️ *Royal Treasury Updated*\n"
+        f"⚖️ *Balance Updated*\n"
         f"{SMALL_LINE}\n"
         f"👤 User ID: `{user_id}`\n"
-        f"💵 Amount: ₹{abs(amount):.2f} {action} balance\n"
+        f"💵 ₹{abs(amount):.2f} {action} balance\n"
         f"💰 *New Balance:* ₹{data['users'][user_id]['balance']:.2f}"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
 # ═══════════════════════════════════════════════════
-# 👤  USER PROFILE
+#  👤  MY PROFILE
 # ═══════════════════════════════════════════════════
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    user_name = update.effective_user.first_name or "Honored Guest"
+    user_name = update.effective_user.first_name or "User"
     data = load_data()
     user = data["users"].get(user_id, {"balance": 0.0, "total_tasks": 0, "accepted": 0, "rejected": 0, "pending": 0})
 
     text = (
-        f"👤 *Royal Profile*\n"
+        f"👤 *My Profile*\n"
         f"{LINE}\n\n"
         f"🎩 *Name:* {user_name}\n"
         f"🆔 *ID:* `{user_id}`\n"
         f"💰 *Balance:* ₹{user.get('balance', 0.0):.2f}\n\n"
         f"{SMALL_LINE}\n"
-        f"📊 *Task Chronicles*\n"
+        f"📊 *Task Stats*\n"
         f"🎯 Total Tasks: *{user.get('total_tasks', 0)}*\n"
         f"✅ Accepted: *{user.get('accepted', 0)}*\n"
         f"❌ Rejected: *{user.get('rejected', 0)}*\n"
         f"⏳ Pending: *{user.get('pending', 0)}*\n"
         f"{SMALL_LINE}\n\n"
-        f"✨ _Continue thy noble work._"
+        f"✨ _Keep completing tasks to earn more._"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 # ═══════════════════════════════════════════════════
-# 💰  WITHDRAWAL SYSTEM
+#  💰  WITHDRAWAL
 # ═══════════════════════════════════════════════════
 
 async def withdrawal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,7 +304,7 @@ async def withdrawal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if balance < 10:
         text = (
-            f"💰 *Royal Treasury*\n"
+            f"💰 *Withdrawal*\n"
             f"{SMALL_LINE}\n"
             f"❌ Minimum withdrawal is ₹10.\n"
             f"💵 Your balance: ₹{balance:.2f}\n\n"
@@ -315,7 +314,7 @@ async def withdrawal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     text = (
-        f"💰 *Royal Treasury*\n"
+        f"💰 *Withdrawal*\n"
         f"{SMALL_LINE}\n"
         f"💵 Available: ₹{balance:.2f}\n\n"
         f"🏦 *Choose your withdrawal method:*"
@@ -337,7 +336,7 @@ async def withdraw_method_callback(update: Update, context: ContextTypes.DEFAULT
         text = (
             f"🎗️ *VSV Withdrawal*\n"
             f"{SMALL_LINE}\n"
-            f"Kindly message the Royal Owner directly:\n"
+            f"Please message the owner directly:\n"
             f"👑 @dtxzahid"
         )
         await query.edit_message_text(text, parse_mode="Markdown")
@@ -364,7 +363,7 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = data["users"].get(user_id, {"balance": 0.0})
 
     if amount > user.get("balance", 0.0):
-        await update.message.reply_text("❌ *Insufficient Royal Treasury balance.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ *Insufficient balance.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
 
     data["users"][user_id]["balance"] -= amount
@@ -381,7 +380,7 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(data)
 
     admin_text = (
-        f"💰 *Royal Withdrawal Request*\n"
+        f"💰 *New Withdrawal Request*\n"
         f"{LINE}\n\n"
         f"👤 User: @{update.effective_user.username or 'N/A'}\n"
         f"🆔 ID: `{user_id}`\n"
@@ -397,24 +396,24 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"✅ *Withdrawal Request Submitted*\n"
         f"{SMALL_LINE}\n"
-        f"Your request has been sent to the Crown for approval.\n"
-        f"✨ _Await thy royal blessing._"
+        f"Your request has been sent to the admin for approval.\n"
+        f"✨ _You will be notified once processed._"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 # ═══════════════════════════════════════════════════
-# 💎  USER — GET COMMENT
+#  💬  GET COMMENT
 # ═══════════════════════════════════════════════════
 
 async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     apps = list(data.get("apps", {}).keys())
     if not apps:
-        await update.message.reply_text("📭 *No tasks available at this moment.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📭 *No Task Available*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    keyboard = [[InlineKeyboardButton(f"💎 {app}", callback_data=f"getapp_{app}")] for app in apps]
-    text = f"💎 *Royal Task Chamber*\n{SMALL_LINE}\n\n✨ _Select an app to receive your comment:_"
+    keyboard = [[InlineKeyboardButton(f"📱 {app}", callback_data=f"getapp_{app}")] for app in apps]
+    text = f"💬 *Get Comment*\n{SMALL_LINE}\n\n✨ _Select an app to receive your comment:_"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
@@ -432,10 +431,10 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in data["history"]: data["history"][user_id] = {}
     if app_name in data["history"][user_id] and len(data["history"][user_id][app_name]) >= 1:
         await query.edit_message_text(
-            "👑 *Royal Notice*\n"
+            "👑 *Notice*\n"
             "━━━━━━━━━━━━━\n\n"
             "You have already received a comment for this app.\n"
-            "✨ _One comment per app, per subject._",
+            "✨ _Only 1 comment per app, per user._",
             parse_mode="Markdown"
         )
         return
@@ -450,7 +449,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(data)
 
     comment_text = (
-        f"💎 *Your Royal Comment*\n"
+        f"💎 *Your Comment*\n"
         f"{LINE}\n\n"
         f"`{chosen}`\n\n"
         f"{SMALL_LINE}\n"
@@ -462,7 +461,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=(
             f"📸 *Please share a screenshot of your review.*\n"
             f"{SMALL_LINE}\n"
-            f"👑 _Awaiting thy proof._"
+            f"⏳ _Awaiting your proof._"
         ),
         parse_mode="Markdown"
     )
@@ -470,15 +469,15 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["proof_app"] = app_name
 
 # ═══════════════════════════════════════════════════
-# 📸  PROOF HANDLING
+#  📸  PROOF HANDLING
 # ═══════════════════════════════════════════════════
 
 async def handle_proof_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_proof"):
         await update.message.reply_text(
-            "⚠️ *Only screenshots are accepted.*\n"
+            "⚠️ *Only proof is accepted.*\n"
             "━━━━━━━━━━━━━\n"
-            "📸 _Please send the proof image._",
+            "📸 _Please send the screenshot._",
             parse_mode="Markdown"
         )
         return
@@ -495,8 +494,18 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(
                 "❌ *Proof already submitted for this app.*\n"
                 "━━━━━━━━━━━━━\n"
-                "Kindly contact the Crown: 👑 @dtxzahid",
+                "Contact: 👑 @dtxzahid",
                 parse_mode="Markdown",
                 reply_markup=MAIN_KEYBOARD
             )
-            c
+            context.user_data["awaiting_proof"] = False
+            return
+
+        await update.message.reply_text(
+            "⏳ *Verifying your proof with AI...*\n"
+            "━━━━━━━━━━━━━\n"
+            "✨ _This will take a moment._",
+            parse_mode="Markdown"
+        )
+        file_path = "temp_proof.jpg"
+      
