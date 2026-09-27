@@ -399,4 +399,113 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             data["users"][user_id]["total_tasks"] += 1
             data["users"][user_id]["pending"] += 1
             data["proofs"][user_id] = {app_name: True}
-            data["saved_proofs"].append({"user_id": user_id, "username": user.username or "N/A", "app_name": app_name, "reviewer_name": 
+            data["saved_proofs"].append({"user_id": user_id, "username": user.username or "N/A", "app_name": app_name, "reviewer_name": reviewer_name, "status": "pending"})
+            save_data(data)
+            admin_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"proofstatus_approve_{user_id}_{app_name}"), InlineKeyboardButton("❌ Reject", callback_data=f"proofstatus_reject_{user_id}_{app_name}")]])
+            try:
+                await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo_file.file_id, caption=f"📥 *New Royal Proof*\n━━━━━━━━━━━━━\n👤 @{user.username} (`{user.id}`)\n📱 *{app_name}*\n🔍 *{reviewer_name}*", parse_mode="Markdown", reply_markup=admin_keyboard)
+            except Exception as e:
+                print(f"Error: {e}")
+            text = f"✨ *Proof Submitted Successfully*\n{LINE}\n\nYour proof has been sent to the Crown.\n🎖️ _Await royal notification._\n\n{SMALL_LINE}\n⚠️ _Fake screenshots may lead to suspension._"
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        except Exception as e:
+            print(f"AI Verification Error: {e}")
+            await update.message.reply_text("❌ *Verification error. Try again.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        finally:
+            if os.path.exists(file_path): os.remove(file_path)
+        context.user_data["awaiting_proof"] = False
+
+# ═══════════════════════════════════════════════════
+# 👑  ADMIN PROOF REVIEW
+# ═══════════════════════════════════════════════════
+
+async def proof_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("Only the Crown can do this.", show_alert=True)
+        return
+    await query.answer()
+    parts = query.data.split("_")
+    action, user_id, app_name = parts[1], parts[2], parts[3]
+    data = load_data()
+    for p in data["saved_proofs"]:
+        if p["user_id"] == user_id and p["app_name"] == app_name and p["status"] == "pending":
+            p["status"] = "approved" if action == "approve" else "rejected"
+            break
+    if user_id in data["users"]:
+        data["users"][user_id]["pending"] -= 1
+        if action == "approve":
+            data["users"][user_id]["accepted"] += 1
+            data["users"][user_id]["balance"] += 10.0
+        else:
+            data["users"][user_id]["rejected"] += 1
+    save_data(data)
+    if action == "approve":
+        user_msg = f"🎉 *Royal Approval*\n{LINE}\n\n✅ Proof for *{app_name}* approved.\n💰 *₹10* added to your Treasury.\n\n✨ _Keep up the noble work!_"
+        await context.bot.send_message(chat_id=int(user_id), text=user_msg, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        await query.edit_message_caption(caption=f"✅ *APPROVED* — {app_name}", parse_mode="Markdown")
+    elif action == "reject":
+        user_msg = f"❌ *Royal Rejection*\n{LINE}\n\nProof for *{app_name}* was not accepted.\n\nKindly contact: 👑 @dtxzahid"
+        await context.bot.send_message(chat_id=int(user_id), text=user_msg, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        await query.edit_message_caption(caption=f"❌ *REJECTED* — {app_name}", parse_mode="Markdown")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✨ *Action cancelled.*", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
+# ═══════════════════════════════════════════════════
+# 🚀  ROYAL LAUNCH — LONG POLLING
+# ═══════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_error_handler(error_handler)
+
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler('DTX', admin_entry),
+            MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry),
+            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry),
+            MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs),
+            MessageHandler(filters.Regex('^Stats$'), show_stats),
+            MessageHandler(filters.Regex('^Broadcast$'), broadcast_entry),
+            MessageHandler(filters.Regex('^Add/Remove Bal$'), admin_bal_entry),
+            MessageHandler(filters.Regex('^Withdrawal$'), withdrawal_entry),
+        ],
+        states={
+            ADMIN_MENU: [
+                MessageHandler(filters.Regex('^Add Comment$'), add_comment_entry),
+                MessageHandler(filters.Regex('^Saved Proof$'), show_saved_proofs),
+                MessageHandler(filters.Regex('^Stats$'), show_stats),
+                MessageHandler(filters.Regex('^Broadcast$'), broadcast_entry),
+                MessageHandler(filters.Regex('^Add/Remove Bal$'), admin_bal_entry),
+            ],
+            ADD_APP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_app)],
+            ADD_COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comments)],
+            BROADCAST_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_msg)],
+            ADMIN_BAL_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_bal_user)],
+            ADMIN_BAL_AMT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_bal_amount)],
+            WITHDRAW_METHOD: [CallbackQueryHandler(withdraw_method_callback, pattern="^withdraw_")],
+            WITHDRAW_UPI: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_upi_id)],
+            WITHDRAW_AMT: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_amount)],
+        },
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CommandHandler('DTX', admin_entry),
+            MessageHandler(filters.Regex('^Get Comment$'), get_comment_entry),
+            MessageHandler(filters.Regex('^My Profile$'), show_profile),
+            MessageHandler(filters.Regex('^Withdrawal$'), withdrawal_entry),
+        ],
+    )
+
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(user_app_callback, pattern="^getapp_"))
+    app.add_handler(CallbackQueryHandler(proof_status_callback, pattern="^proofstatus_"))
+    app.add_handler(MessageHandler(filters.Regex('^My Profile$'), show_profile))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_proof_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_proof_photo))
+
+    print("👑 Royal Bot is now polling Telegram for messages...")
+    print("✨ No webhook needed. Bot is alive and listening.")
+    app.run_polling(drop_pending_updates=True)
