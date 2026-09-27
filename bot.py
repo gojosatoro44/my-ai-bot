@@ -30,7 +30,6 @@ if not TELEGRAM_TOKEN: raise ValueError("Missing TELEGRAM_TOKEN.")
 if not GROQ_API_KEY: raise ValueError("Missing GROQ_API_KEY.")
 if not MONGODB_URI: raise ValueError("Missing MONGODB_URI.")
 
-# --- DB ---
 try:
     mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
@@ -45,7 +44,11 @@ collection = db["data"]
 DEFAULTS = {
     "apps": {}, "history": {}, "proofs": {}, "saved_proofs": [],
     "users": {}, "withdrawals": [], "banned_users": [], "rejections": [],
-    "used_screenshots": [], "pending_proofs": {}, "force_join_channel": None
+    "used_screenshots": [], "pending_proofs": {}, "force_join_channel": None,
+    "attempts": {},
+    "comment_usage": {},   # NEW: rotation tracker
+    "last_request": {},    # NEW: rate limiting
+    "auto_ban": {}         # NEW: auto-ban tracker
 }
 
 def load_data():
@@ -75,6 +78,13 @@ VISION_MODEL = "qwen/qwen3.8-27b"
 def is_banned(data, user_id):
     return str(user_id) in [str(x) for x in data.get("banned_users", [])]
 
+def auto_ban_hours_left(data, uid):
+    ab = data.get("auto_ban", {}).get(str(uid), {})
+    until = ab.get("banned_until")
+    if until and time.time() < until:
+        return int((until - time.time()) / 3600) + 1
+    return 0
+
 def count_used(data, app_name):
     used = 0
     for uid, uh in data.get("history", {}).items():
@@ -82,7 +92,6 @@ def count_used(data, app_name):
             used += 1
     return used
 
-# --- Keyboards ---
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [["Get Comment", "My Profile"], ["Withdrawal", "History"]],
     resize_keyboard=True
@@ -98,7 +107,6 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# --- States ---
 (
     ADMIN_MENU, ADD_APP, ADD_COMMENTS, BROADCAST_MSG, ADMIN_BAL_ID, ADMIN_BAL_AMT,
     WITHDRAW_METHOD, WITHDRAW_UPI, WITHDRAW_AMT,
@@ -108,7 +116,6 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 SEP = "──────────────────────"
 
-# --- Error handler ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(msg="Exception:", exc_info=context.error)
     if ADMIN_ID != 0:
@@ -118,7 +125,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             pass
 
 # ═══════════════════════════════════════════════════
-#   FORCE JOIN CHECK
+#   FORCE JOIN
 # ═══════════════════════════════════════════════════
 
 async def ensure_joined(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -145,9 +152,9 @@ async def ensure_joined(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
         [InlineKeyboardButton("✅ I Joined", callback_data="check_join")]
     ])
     text = (
-        f"⚠️ You must join our channel to use this bot.\n\n"
+        f"⚠️ Bot use karne ke liye pehle channel join karo.\n\n"
         f"👉 Join: {channel}\n\n"
-        f"After joining, tap 'I Joined' below."
+        f"Join karne ke baad 'I Joined' button dabao."
     )
     try:
         await context.bot.send_message(chat_id=user_id, text=text, reply_markup=keyboard)
@@ -161,16 +168,16 @@ async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = load_data()
     channel = data.get("force_join_channel")
     if not channel:
-        await query.edit_message_text("✅ Verified. Send /start to begin.")
+        await query.edit_message_text("✅ Verified. /start bhejo.")
         return
     try:
         member = await context.bot.get_chat_member(chat_id=channel, user_id=update.effective_user.id)
         if member.status in ("member", "administrator", "creator"):
-            await query.edit_message_text("✅ Verified! You can now use the bot.\n\nSend /start to begin.")
+            await query.edit_message_text("✅ Verified! Ab bot use kar sakte ho.\n\n/start bhejo.")
             return
     except Exception as e:
         print(f"verify error: {e}")
-    await query.answer("❌ You haven't joined the channel yet.", show_alert=True)
+    await query.answer("❌ Aapne abhi channel join nahi kiya.", show_alert=True)
 
 # ═══════════════════════════════════════════════════
 #   START
@@ -182,19 +189,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
     if is_banned(data, update.effective_user.id):
-        await update.message.reply_text("🚫 You are banned from using this bot.\nContact @dtxzahid for support.")
+        await update.message.reply_text("🚫 Aap ban ho chuke ho.\nContact: @dtxzahid")
         return
 
     if not await ensure_joined(update, context):
         return
 
-    name = update.effective_user.first_name or "there"
+    name = update.effective_user.first_name or "dost"
     text = (
-        f"👋 Hey {name}!\n"
+        f"👋 Welcome {name}!\n"
         f"{SEP}\n\n"
-        f"Welcome to the Task Bot.\n"
-        f"Complete simple tasks and earn rewards.\n\n"
-        f"Choose an option below to start."
+        f"Ye bot se aap review ke liye comment le sakte ho aur proof bhi submit kar sakte ho.\n\n"
+        f"Neeche se option choose karo."
     )
     await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
 
@@ -212,16 +218,15 @@ async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ADMIN_MENU
 
-# --- Add Comment ---
 async def add_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📱 Enter the App Name:")
+    await update.message.reply_text("📱 App Name bhejo:")
     return ADD_APP
 
 async def add_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["temp_app_name"] = update.message.text.strip()
     await update.message.reply_text(
         f"✅ App: {context.user_data['temp_app_name']}\n\n"
-        f"Now send comments separated by commas.\n"
+        f"Ab comments comma se separate karke bhejo.\n"
         f"Example: `Nice app,Good UI,Love it`",
         parse_mode="Markdown"
     )
@@ -236,19 +241,18 @@ async def add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["apps"][app_name].extend(comments)
     save_data(data)
     await update.message.reply_text(
-        f"✅ Comments saved.\n{SEP}\n📱 App: {app_name}\n💬 Added: {len(comments)}",
+        f"✅ Comments save ho gaye.\n{SEP}\n📱 App: {app_name}\n💬 Added: {len(comments)}",
         reply_markup=MAIN_KEYBOARD
     )
     return ConversationHandler.END
 
-# --- Live Apps ---
 async def live_apps_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     apps = data.get("apps", {})
     if not apps:
-        await update.message.reply_text("📭 No apps yet.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("📭 Abhi koi app nahi hai.", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
-    text = f"📱 Live Apps\n{SEP}\n\nTap an app to manage it:"
+    text = f"📱 Live Apps\n{SEP}\n\nKisi app pe tap karo:"
     keyboard = []
     for app_name, comments in apps.items():
         total = len(comments)
@@ -266,7 +270,7 @@ async def manage_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     app_name = query.data.replace("manageapp_", "")
     data = load_data()
     if app_name not in data["apps"]:
-        await query.edit_message_text("❌ App no longer exists.")
+        await query.edit_message_text("❌ App exist nahi karta.")
         return
     total = len(data["apps"][app_name])
     used = count_used(data, app_name)
@@ -274,10 +278,10 @@ async def manage_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (
         f"📱 {app_name}\n"
         f"{SEP}\n"
-        f"Total Comments: {total}\n"
+        f"Total: {total}\n"
         f"Used: {used}\n"
         f"Remaining: {left}\n\n"
-        f"Choose an action:"
+        f"Action choose karo:"
     )
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Comments", callback_data=f"addcmt_{app_name}")],
@@ -291,7 +295,7 @@ async def add_cmt_to_app_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     app_name = query.data.replace("addcmt_", "")
     context.user_data["app_to_add"] = app_name
-    await query.edit_message_text(f"Send new comments for *{app_name}* separated by commas:", parse_mode="Markdown")
+    await query.edit_message_text(f"*{app_name}* ke liye naye comments bhejo comma se:", parse_mode="Markdown")
     return APP_ADD_COMMENTS
 
 async def app_add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -303,7 +307,7 @@ async def app_add_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["apps"][app_name].extend(comments)
     save_data(data)
     await update.message.reply_text(
-        f"✅ Added {len(comments)} comments to {app_name}.",
+        f"✅ {app_name} me {len(comments)} comments add ho gaye.",
         reply_markup=MAIN_KEYBOARD
     )
     return ConversationHandler.END
@@ -315,15 +319,15 @@ async def remove_cmt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = load_data()
     comments = data["apps"].get(app_name, [])
     if not comments:
-        await query.edit_message_text("No comments to remove.")
+        await query.edit_message_text("Koi comment nahi hai.")
         return
     keyboard = []
-    for i, c in enumerate(comments[:20]):  # limit 20
+    for i, c in enumerate(comments[:20]):
         short = c[:40] + ("..." if len(c) > 40 else "")
         keyboard.append([InlineKeyboardButton(f"❌ {short}", callback_data=f"delcmt_{app_name}_{i}")])
     keyboard.append([InlineKeyboardButton("↩️ Back", callback_data=f"manageapp_{app_name}")])
     await query.edit_message_text(
-        f"Tap a comment to delete it from *{app_name}*:",
+        f"*{app_name}* se comment delete karne ke liye tap karo:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -332,16 +336,15 @@ async def delete_cmt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     parts = query.data.split("_", 2)
-    # parts: ['delcmt', app_name, index]
     app_name = parts[1]
     index = int(parts[2])
     data = load_data()
     if app_name in data["apps"] and 0 <= index < len(data["apps"][app_name]):
         removed = data["apps"][app_name].pop(index)
         save_data(data)
-        await query.edit_message_text(f"✅ Removed: {removed[:60]}")
+        await query.edit_message_text(f"✅ Remove: {removed[:60]}")
     else:
-        await query.edit_message_text("❌ Comment not found.")
+        await query.edit_message_text("❌ Comment nahi mila.")
 
 async def delete_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -351,16 +354,15 @@ async def delete_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if app_name in data["apps"]:
         del data["apps"][app_name]
         save_data(data)
-        await query.edit_message_text(f"🗑️ Deleted app: {app_name}")
+        await query.edit_message_text(f"🗑️ Delete: {app_name}")
     else:
-        await query.edit_message_text("❌ App not found.")
+        await query.edit_message_text("❌ App nahi mila.")
 
-# --- Saved Proofs ---
 async def show_saved_proofs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     proofs = data.get("saved_proofs", [])
     if not proofs:
-        await update.message.reply_text("📭 No saved proofs yet.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("📭 Abhi koi saved proof nahi.", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
     text = f"📋 Saved Proofs — Last 10\n{SEP}\n\n"
     for i, p in enumerate(proofs[-10:], 1):
@@ -373,7 +375,7 @@ async def show_saved_proofs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- Stats ---
+# --- Stats with Pending Tasks counter (Feature 1) ---
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     users = data.get("users", {})
@@ -383,12 +385,17 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rejected = len(rejections)
     total_balance = sum(u.get("balance", 0) for u in users.values())
     total_withdrawn = sum(w.get("amount", 0) for w in data.get("withdrawals", []) if w.get("status") == "approved")
+
+    # Pending active tasks
+    pending_count = sum(len(v) for v in data.get("pending_proofs", {}).values())
+
     text = (
         f"📊 Bot Statistics\n"
         f"{SEP}\n\n"
         f"👥 Total Users: {len(users)}\n"
-        f"📝 Total Approved: {approved}\n"
-        f"❌ Total Rejected: {rejected}\n\n"
+        f"📝 Approved Proofs: {approved}\n"
+        f"❌ Rejected Proofs: {rejected}\n"
+        f"⏳ Active Tasks: {pending_count}\n\n"
         f"{SEP}\n"
         f"💰 Active Balance: ₹{total_balance:.2f}\n"
         f"💸 Total Withdrawn: ₹{total_withdrawn:.2f}"
@@ -396,16 +403,15 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- Broadcast ---
 async def broadcast_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📢 Send the message to broadcast:")
+    await update.message.reply_text("📢 Broadcast message bhejo:")
     return BROADCAST_MSG
 
 async def broadcast_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text
     data = load_data()
     users = list(data.get("users", {}).keys())
-    await update.message.reply_text(f"⏳ Sending to {len(users)} users...")
+    await update.message.reply_text(f"⏳ {len(users)} users ko bhej raha hoon...")
     count = 0
     final_msg = f"📢 Announcement\n{SEP}\n\n{msg}"
     for uid in users:
@@ -415,17 +421,16 @@ async def broadcast_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.05)
         except Exception:
             pass
-    await update.message.reply_text(f"✅ Delivered to {count} users.", reply_markup=ADMIN_KEYBOARD)
+    await update.message.reply_text(f"✅ {count} users ko deliver ho gaya.", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- Balance ---
 async def admin_bal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚖️ Send the User ID:")
+    await update.message.reply_text("⚖️ User ID bhejo:")
     return ADMIN_BAL_ID
 
 async def admin_bal_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bal_user_id"] = update.message.text.strip()
-    await update.message.reply_text("💵 Send amount (e.g., 50 to add, -50 to remove):")
+    await update.message.reply_text("💵 Amount bhejo (e.g., 50 add, -50 remove):")
     return ADMIN_BAL_AMT
 
 async def admin_bal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -440,20 +445,19 @@ async def admin_bal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["users"][uid] = {"balance": 0.0, "total_tasks": 0, "accepted": 0, "rejected": 0}
     data["users"][uid]["balance"] += amount
     save_data(data)
-    action = "added to" if amount > 0 else "removed from"
+    action = "added" if amount > 0 else "removed"
     await update.message.reply_text(
-        f"✅ Balance updated.\n{SEP}\n👤 {uid}\n💵 ₹{abs(amount):.2f} {action} balance\n💰 New: ₹{data['users'][uid]['balance']:.2f}",
+        f"✅ Balance update.\n{SEP}\n👤 {uid}\n💵 ₹{abs(amount):.2f} {action}\n💰 New: ₹{data['users'][uid]['balance']:.2f}",
         reply_markup=ADMIN_KEYBOARD
     )
     return ADMIN_MENU
 
-# --- Force Join Setter ---
 async def force_join_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     current = data.get("force_join_channel") or "Not set"
     await update.message.reply_text(
         f"📢 Current Force Join: {current}\n\n"
-        f"Send the channel username (e.g., @mychannel) or send `off` to disable.",
+        f"Channel username bhejo (e.g., @mychannel) ya `off` likho.",
         parse_mode="Markdown"
     )
     return FORCE_JOIN_SET
@@ -464,18 +468,17 @@ async def force_join_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if val.lower() == "off":
         data["force_join_channel"] = None
         save_data(data)
-        await update.message.reply_text("✅ Force join disabled.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text("✅ Force join off.", reply_markup=ADMIN_KEYBOARD)
         return ADMIN_MENU
     if not val.startswith("@"):
         val = "@" + val
     data["force_join_channel"] = val
     save_data(data)
-    await update.message.reply_text(f"✅ Force join set to {val}.", reply_markup=ADMIN_KEYBOARD)
+    await update.message.reply_text(f"✅ Force join set: {val}", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
-# --- Ban User ---
 async def ban_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚫 Send the User ID to ban:")
+    await update.message.reply_text("🚫 User ID bhejo ban karne ke liye:")
     return BAN_USER_ID
 
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -486,13 +489,13 @@ async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         banned.append(uid)
         data["banned_users"] = banned
         save_data(data)
-        await update.message.reply_text(f"✅ User {uid} banned.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text(f"✅ User {uid} ban ho gaya.", reply_markup=ADMIN_KEYBOARD)
     else:
-        await update.message.reply_text(f"⚠️ User {uid} is already banned.", reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text(f"⚠️ User {uid} already banned.", reply_markup=ADMIN_KEYBOARD)
     return ADMIN_MENU
 
 # ═══════════════════════════════════════════════════
-#   USER: PROFILE / HISTORY
+#   PROFILE / HISTORY (Hindi)
 # ═══════════════════════════════════════════════════
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -502,9 +505,9 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     u = data["users"].get(uid, {"balance": 0.0, "total_tasks": 0, "accepted": 0, "rejected": 0})
     text = (
-        f"👤 My Profile\n"
+        f"👤 Meri Profile\n"
         f"{SEP}\n\n"
-        f"Name: {name}\n"
+        f"Naam: {name}\n"
         f"ID: {uid}\n"
         f"Balance: ₹{u.get('balance', 0.0):.2f}\n\n"
         f"{SEP}\n"
@@ -522,7 +525,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     proofs = [p for p in data.get("saved_proofs", []) if p.get("user_id") == uid]
     rejections = [r for r in data.get("rejections", []) if r.get("user_id") == uid]
     if not proofs and not rejections:
-        await update.message.reply_text("📭 No task history yet.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📭 Abhi tak koi task nahi kiya.", reply_markup=MAIN_KEYBOARD)
         return
     text = f"📜 Task History\n{SEP}\n\n"
     combined = []
@@ -546,11 +549,11 @@ async def withdrawal_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = u.get("balance", 0.0)
     if bal < 10:
         await update.message.reply_text(
-            f"💰 Withdrawal\n{SEP}\n\n❌ Minimum is ₹10.\n💵 Your balance: ₹{bal:.2f}",
+            f"💰 Withdrawal\n{SEP}\n\n❌ Minimum ₹10 hai.\n💵 Aapka balance: ₹{bal:.2f}",
             reply_markup=MAIN_KEYBOARD
         )
         return ConversationHandler.END
-    text = f"💰 Withdrawal\n{SEP}\n\nAvailable: ₹{bal:.2f}\n\nChoose method:"
+    text = f"💰 Withdrawal\n{SEP}\n\nAvailable: ₹{bal:.2f}\n\nMethod choose karo:"
     keyboard = [[
         InlineKeyboardButton("💳 UPI", callback_data="withdraw_upi"),
         InlineKeyboardButton("🎗️ VSV", callback_data="withdraw_vsv")
@@ -562,17 +565,17 @@ async def withdraw_method_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     if query.data == "withdraw_upi":
-        await query.edit_message_text("💳 Send your UPI ID:")
+        await query.edit_message_text("💳 Apna UPI ID bhejo:")
         return WITHDRAW_UPI
     else:
         await query.edit_message_text(
-            f"🎗️ VSV Withdrawal\n{SEP}\n\nPlease message the owner directly:\n👉 @dtxzahid"
+            f"🎗️ VSV Withdrawal\n{SEP}\n\nOwner ko direct message karo:\n👉 @dtxzahid"
         )
         return ConversationHandler.END
 
 async def withdraw_upi_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["withdraw_upi"] = update.message.text.strip()
-    await update.message.reply_text("💵 Send the amount (Min ₹10):")
+    await update.message.reply_text("💵 Amount bhejo (Min ₹10):")
     return WITHDRAW_AMT
 
 async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -582,12 +585,12 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid amount.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     if amount < 10:
-        await update.message.reply_text("❌ Minimum is ₹10.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Minimum ₹10 hai.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     uid = str(update.effective_user.id)
     data = load_data()
     if amount > data["users"].get(uid, {}).get("balance", 0.0):
-        await update.message.reply_text("❌ Insufficient balance.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Balance kam hai.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
 
     data["users"][uid]["balance"] -= amount
@@ -618,7 +621,7 @@ async def withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Send admin error: {e}")
 
     await update.message.reply_text(
-        f"✅ Withdrawal submitted.\n{SEP}\nPending approval.",
+        f"✅ Withdrawal request submit ho gayi.\n{SEP}\nApproval ka wait karo.",
         reply_markup=MAIN_KEYBOARD
     )
     return ConversationHandler.END
@@ -638,7 +641,7 @@ async def withdrawal_status_callback(update: Update, context: ContextTypes.DEFAU
             target = w
             break
     if not target:
-        await query.edit_message_text(f"⚠️ No pending withdrawal for {uid}.")
+        await query.edit_message_text(f"⚠️ {uid} ke liye koi pending withdrawal nahi.")
         return
 
     if action == "approve":
@@ -647,11 +650,11 @@ async def withdrawal_status_callback(update: Update, context: ContextTypes.DEFAU
         try:
             await context.bot.send_message(
                 chat_id=int(uid),
-                text=f"✅ Withdrawal Approved\n{SEP}\n\n₹{target['amount']:.2f} has been processed.",
+                text=f"✅ Withdrawal Approve\n{SEP}\n\n₹{target['amount']:.2f} process ho gaya.",
                 reply_markup=MAIN_KEYBOARD
             )
         except Exception: pass
-        await query.edit_message_text(f"✅ Approved ₹{target['amount']:.2f} for {uid}.")
+        await query.edit_message_text(f"✅ ₹{target['amount']:.2f} approve for {uid}.")
     else:
         target["status"] = "rejected"
         if uid in data["users"]:
@@ -660,29 +663,42 @@ async def withdrawal_status_callback(update: Update, context: ContextTypes.DEFAU
         try:
             await context.bot.send_message(
                 chat_id=int(uid),
-                text=f"❌ Withdrawal Rejected\n{SEP}\n\n₹{target['amount']:.2f} refunded to your balance.\nContact @dtxzahid if you have questions.",
+                text=f"❌ Withdrawal Reject\n{SEP}\n\n₹{target['amount']:.2f} aapke balance me wapas.\nContact @dtxzahid.",
                 reply_markup=MAIN_KEYBOARD
             )
         except Exception: pass
-        await query.edit_message_text(f"❌ Rejected. ₹{target['amount']:.2f} refunded to {uid}.")
+        await query.edit_message_text(f"❌ Rejected. ₹{target['amount']:.2f} refund {uid}.")
 
 # ═══════════════════════════════════════════════════
-#   GET COMMENT
+#   GET COMMENT (Hindi + Rate limit + Rotation)
 # ═══════════════════════════════════════════════════
 
 async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_joined(update, context): return ConversationHandler.END
     data = load_data()
-    if is_banned(data, update.effective_user.id):
-        await update.message.reply_text("🚫 You are banned.")
+    uid = str(update.effective_user.id)
+
+    if is_banned(data, uid):
+        await update.message.reply_text("🚫 Aap ban ho chuke ho.")
         return ConversationHandler.END
+
+    # Auto-ban check
+    hrs = auto_ban_hours_left(data, uid)
+    if hrs > 0:
+        await update.message.reply_text(
+            f"🚫 Aapko {hrs} ghante ke liye ban kiya gaya hai.\n\n"
+            f"Wajah: Baar baar fake proofs.\n"
+            f"Contact: @dtxzahid"
+        )
+        return ConversationHandler.END
+
     apps = list(data.get("apps", {}).keys())
     if not apps:
-        await update.message.reply_text("📭 No tasks available right now.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📭 Abhi koi task available nahi hai.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     keyboard = [[InlineKeyboardButton(f"📱 {app}", callback_data=f"getapp_{app}")] for app in apps]
     await update.message.reply_text(
-        f"📋 Available Apps\n{SEP}\n\nSelect an app:",
+        f"📋 Available Apps\n{SEP}\n\nKoi app select karo:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ConversationHandler.END
@@ -694,8 +710,26 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     data = load_data()
 
+    # Rate limit (Feature 5)
+    last = data.setdefault("last_request", {})
+    now = time.time()
+    if uid in last and now - last[uid] < 120:
+        remaining = int(120 - (now - last[uid]))
+        await query.edit_message_text(
+            f"⏳ Thoda ruko!\n\n{remaining} seconds ke baad dobara try karo."
+        )
+        return
+
+    # Auto-ban check
+    hrs = auto_ban_hours_left(data, uid)
+    if hrs > 0:
+        await query.edit_message_text(
+            f"🚫 Aapko {hrs} ghante ke liye ban kiya gaya hai.\n\nContact: @dtxzahid"
+        )
+        return
+
     if app_name not in data["apps"] or not data["apps"][app_name]:
-        await query.edit_message_text("📭 No comments for this app.")
+        await query.edit_message_text("📭 Is app ke liye comment nahi hai.")
         return
 
     if uid not in data["history"]:
@@ -703,47 +737,59 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if app_name in data["history"][uid] and data["history"][uid][app_name]:
         await query.edit_message_text(
-            "⚠️ You have already received a comment for this app.\n\n"
-            "If you want more comments then contact admin @DTXZAHID"
+            "⚠️ Aapne is app ka comment already le liya hai.\n\n"
+            "Aur comment chahiye toh contact karo: @DTXZAHID"
         )
         return
 
     available = [c for c in data["apps"][app_name] if c not in data["history"][uid].get(app_name, [])]
     if not available:
-        await query.edit_message_text("📭 No more unique comments available.")
+        await query.edit_message_text("📭 Aur unique comment available nahi hai.")
         return
 
-    chosen = random.choice(available)
+    # ⬇️ FEATURE 7: Comment Rotation (lowest usage first)
+    usage = data.setdefault("comment_usage", {}).setdefault(app_name, {})
+    min_usage = min(usage.get(c, 0) for c in available)
+    lowest_used = [c for c in available if usage.get(c, 0) == min_usage]
+    chosen = random.choice(lowest_used)
+    usage[chosen] = usage.get(chosen, 0) + 1
+
     data["history"][uid][app_name] = [chosen]
 
-    # Store pending proof for timeout
-    if "pending_proofs" not in data:
-        data["pending_proofs"] = {}
-    if uid not in data["pending_proofs"]:
-        data["pending_proofs"][uid] = {}
+    # Initialize attempts
+    if "attempts" not in data: data["attempts"] = {}
+    if uid not in data["attempts"]: data["attempts"][uid] = {}
+    data["attempts"][uid][app_name] = 3
+
+    # Pending proof for timeout
+    if "pending_proofs" not in data: data["pending_proofs"] = {}
+    if uid not in data["pending_proofs"]: data["pending_proofs"][uid] = {}
     data["pending_proofs"][uid][app_name] = {
         "comment": chosen,
-        "timestamp": time.time()
+        "timestamp": now
     }
+
+    # Update rate limit timestamp
+    last[uid] = now
+
     save_data(data)
 
     await query.edit_message_text(
-        f"💬 Your Comment\n{SEP}\n\n`{chosen}`\n\nTap above to copy.",
+        f"💬 Aapka Comment\n{SEP}\n\n`{chosen}`\n\nCopy karne ke liye upar tap karo.",
         parse_mode="Markdown"
     )
     await context.bot.send_message(
         chat_id=uid,
         text=(
-            f"📸 Send the screenshot here.\n\n"
-            f"⏰ You have 1 hour to submit.\n"
-            f"After 1 hour, your proof will not be accepted.\n"
-            f"Contact @dtxzahid if you need more time."
+            f"📸 Screenshot yaha bhejo.\n\n"
+            f"⏰ Aapke paas 1 ghante ka time hai.\n"
+            f"1 ghante ke baad proof accept nahi hoga.\n"
+            f"Zarurat ho toh contact karo: @dtxzahid"
         )
     )
     context.user_data["awaiting_proof"] = True
     context.user_data["proof_app"] = app_name
 
-    # Schedule timeout (1 hour) and reminder (30 min)
     jq = context.job_queue
     if jq:
         jq.run_once(proof_timeout_job, when=3600,
@@ -765,20 +811,20 @@ async def proof_timeout_job(context: ContextTypes.DEFAULT_TYPE):
     del pending[uid][app_name]
     if not pending[uid]:
         del pending[uid]
-    # Return comment to pool
     if app_name in data["apps"] and comment not in data["apps"][app_name]:
         data["apps"][app_name].append(comment)
-    # Clear user history so they can get a new comment
     if uid in data["history"] and app_name in data["history"][uid]:
         del data["history"][uid][app_name]
+    if "attempts" in data and uid in data["attempts"] and app_name in data["attempts"][uid]:
+        del data["attempts"][uid][app_name]
     save_data(data)
     try:
         await context.bot.send_message(
             chat_id=int(uid),
             text=(
-                f"⏰ Time exceeded.\n{SEP}\n\n"
-                f"You did not submit your proof for {app_name} within 1 hour.\n\n"
-                f"Contact @dtxzahid for a new comment."
+                f"⏰ Time khatam!\n{SEP}\n\n"
+                f"Aapne 1 ghante me {app_name} ka proof nahi bheja.\n\n"
+                f"Naya comment ke liye contact karo: @dtxzahid"
             ),
             reply_markup=MAIN_KEYBOARD
         )
@@ -795,7 +841,7 @@ async def proof_reminder_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id=int(uid),
-            text=f"⏰ 30 minutes left to submit your proof for {app_name}!"
+            text=f"⏰ Sirf 30 minute bache hain {app_name} ka proof bhejne ke liye!"
         )
     except Exception: pass
 
@@ -805,7 +851,7 @@ async def proof_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_proof_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_proof"):
-        await update.message.reply_text("⚠️ Please send a screenshot (image), not text.")
+        await update.message.reply_text("⚠️ Sirf screenshot bhejo, text nahi.")
         return
 
 async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -819,32 +865,25 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     uid = str(user.id)
     data = load_data()
 
-    # Duplicate check
     used_ids = [x.get("file_unique_id") for x in data.get("used_screenshots", [])]
     if file_unique_id in used_ids:
         await update.message.reply_text(
-            "❌ This screenshot has already been used.\n\n"
-            "Please submit a fresh screenshot.",
+            "❌ Ye screenshot already use ho chuka hai.\n\nNaya screenshot bhejo.",
             reply_markup=MAIN_KEYBOARD
         )
-        context.user_data["awaiting_proof"] = False
         return
 
-    # Check if still pending (timeout may have fired)
     pending = data.get("pending_proofs", {})
     if uid not in pending or app_name not in pending[uid]:
         await update.message.reply_text(
-            "⏰ Time exceeded or no active task.\n\n"
-            "Contact @dtxzahid for a new comment.",
+            "⏰ Time khatam ya koi active task nahi.\n\nContact: @dtxzahid",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
         return
 
-    # Timestamp check
     ts = pending[uid][app_name].get("timestamp", 0)
     if time.time() - ts > 3600:
-        # Expired
         comment = pending[uid][app_name]["comment"]
         del pending[uid][app_name]
         if not pending[uid]:
@@ -853,9 +892,11 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             data["apps"][app_name].append(comment)
         if uid in data["history"] and app_name in data["history"][uid]:
             del data["history"][uid][app_name]
+        if "attempts" in data and uid in data["attempts"] and app_name in data["attempts"][uid]:
+            del data["attempts"][uid][app_name]
         save_data(data)
         await update.message.reply_text(
-            "⏰ Time exceeded.\n\nContact @dtxzahid for a new comment.",
+            "⏰ Time khatam.\n\nContact: @dtxzahid",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
@@ -863,15 +904,15 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if uid in data["proofs"] and app_name in data["proofs"][uid]:
         await update.message.reply_text(
-            "❌ You already submitted a proof for this app.\n\n"
-            "Contact @dtxzahid if you uploaded the wrong screenshot.",
+            "❌ Aapne is app ka proof already submit kar diya hai.\n\n"
+            "Galat screenshot tha toh contact: @dtxzahid",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
         return
 
     await update.message.reply_text(
-        "⏳ Proof is being checked by our admin. Please wait for 5-10 seconds..."
+        "⏳ Proof check kiya ja raha hai. 5-10 second wait karo..."
     )
 
     file_path = "temp_proof.jpg"
@@ -904,8 +945,16 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         comment_matched = result.get("comment_match", False)
 
+        # ═════ REJECTED PATH ═════
         if not comment_matched:
-            # Log rejection
+            if "attempts" not in data: data["attempts"] = {}
+            if uid not in data["attempts"]: data["attempts"][uid] = {}
+            if app_name not in data["attempts"][uid]:
+                data["attempts"][uid][app_name] = 3
+
+            data["attempts"][uid][app_name] -= 1
+            remaining = data["attempts"][uid][app_name]
+
             data.setdefault("rejections", []).append({
                 "user_id": uid,
                 "username": user.username or "N/A",
@@ -913,24 +962,67 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "reason": "comment_mismatch",
                 "timestamp": time.time()
             })
-            # Cleanup pending
-            if uid in pending and app_name in pending[uid]:
-                del pending[uid][app_name]
-                if not pending[uid]:
-                    del pending[uid]
+
             if uid in data["users"]:
                 data["users"][uid]["rejected"] = data["users"][uid].get("rejected", 0) + 1
                 data["users"][uid]["total_tasks"] = data["users"][uid].get("total_tasks", 0) + 1
-            save_data(data)
-            await update.message.reply_text(
-                f"❌ The proof is fake or invalid so it's rejected.\n\n"
-                f"If you think the proof is real then you can contact admin @DTXZAHID",
-                reply_markup=MAIN_KEYBOARD
-            )
-            context.user_data["awaiting_proof"] = False
+            else:
+                data["users"][uid] = {"balance": 0.0, "total_tasks": 1, "accepted": 0, "rejected": 1}
+
+            if remaining > 0:
+                save_data(data)
+                await update.message.reply_text(
+                    f"❌ Proof Rejected\n\n"
+                    f"{remaining} Attempts Baaki Hain\n"
+                    f"Dobara Screenshot Bhejo"
+                )
+                # Keep awaiting_proof = True
+            else:
+                # All attempts over — check auto-ban (Feature 4)
+                auto_ban = data.setdefault("auto_ban", {})
+                if uid not in auto_ban:
+                    auto_ban[uid] = {"failed_apps": [], "banned_until": None}
+                if app_name not in auto_ban[uid]["failed_apps"]:
+                    auto_ban[uid]["failed_apps"].append(app_name)
+
+                banned_now = False
+                if len(auto_ban[uid]["failed_apps"]) >= 3:
+                    auto_ban[uid]["banned_until"] = time.time() + 86400  # 24h
+                    auto_ban[uid]["failed_apps"] = []
+                    banned_now = True
+
+                if uid in pending and app_name in pending[uid]:
+                    del pending[uid][app_name]
+                    if not pending[uid]:
+                        del pending[uid]
+
+                jq = context.job_queue
+                if jq:
+                    for j in jq.get_jobs_by_name(f"timeout_{uid}_{app_name}"):
+                        j.schedule_removal()
+                    for j in jq.get_jobs_by_name(f"reminder_{uid}_{app_name}"):
+                        j.schedule_removal()
+
+                save_data(data)
+
+                if banned_now:
+                    await update.message.reply_text(
+                        f"❌ Saare Attempts Khatam\n\n"
+                        f"🚫 Aapko 24 ghante ke liye ban kiya gaya hai.\n"
+                        f"Wajah: Baar baar fake proofs.\n"
+                        f"Contact: @dtxzahid"
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Saare Attempts Khatam\n\n"
+                        f"Ab aap is app ke liye screenshot nahi bhej sakte.\n\n"
+                        f"Dusra app try karo ya contact: @dtxzahid",
+                        reply_markup=MAIN_KEYBOARD
+                    )
+                context.user_data["awaiting_proof"] = False
             return
 
-        # Verified — auto-approve
+        # ═════ VERIFIED PATH ═════
         reviewer_name = result.get("reviewer_name", "Unknown")
 
         if uid not in data["users"]:
@@ -957,15 +1049,20 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "timestamp": time.time()
         })
 
-        # Cleanup pending
+        # Reset auto-ban failure streak on success
+        auto_ban = data.setdefault("auto_ban", {})
+        if uid in auto_ban:
+            auto_ban[uid]["failed_apps"] = []
+
         if uid in pending and app_name in pending[uid]:
             del pending[uid][app_name]
             if not pending[uid]:
                 del pending[uid]
+        if "attempts" in data and uid in data["attempts"] and app_name in data["attempts"][uid]:
+            del data["attempts"][uid][app_name]
 
         save_data(data)
 
-        # Cancel scheduled jobs
         jq = context.job_queue
         if jq:
             for j in jq.get_jobs_by_name(f"timeout_{uid}_{app_name}"):
@@ -973,7 +1070,6 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             for j in jq.get_jobs_by_name(f"reminder_{uid}_{app_name}"):
                 j.schedule_removal()
 
-        # Notify admin (no buttons)
         admin_caption = (
             f"📥 New Proof Auto-Approved\n"
             f"{SEP}\n"
@@ -994,14 +1090,14 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             f"✅ Proof Verified\n"
             f"{SEP}\n\n"
-            f"Your proof has been accepted.\n"
-            f"⚠️ Note: Fake screenshots may lead to account suspension.",
+            f"Aapka proof accept ho gaya.\n\n"
+            f"⚠️ Note: Fake screenshots se account ban ho sakta hai.",
             reply_markup=MAIN_KEYBOARD
         )
 
     except Exception as e:
         print(f"Verification error: {e}")
-        await update.message.reply_text("❌ Error verifying proof. Try again later.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Proof verify nahi hua. Dobara try karo.", reply_markup=MAIN_KEYBOARD)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -1012,7 +1108,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ═══════════════════════════════════════════════════
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Action cancelled.", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text("Cancel kar diya.", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 # ═══════════════════════════════════════════════════
@@ -1081,7 +1177,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler('start', start))
     app.add_handler(conv_handler)
 
-    # Inline callbacks
     app.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"))
     app.add_handler(CallbackQueryHandler(user_app_callback, pattern="^getapp_"))
     app.add_handler(CallbackQueryHandler(withdrawal_status_callback, pattern="^wdstatus_"))
@@ -1091,7 +1186,6 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(delete_cmt_callback, pattern="^delcmt_"))
     app.add_handler(CallbackQueryHandler(delete_app_callback, pattern="^delapp_"))
 
-    # User text/photo
     app.add_handler(MessageHandler(filters.Regex('^My Profile$'), show_profile))
     app.add_handler(MessageHandler(filters.Regex('^History$'), show_history))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_proof_text))
