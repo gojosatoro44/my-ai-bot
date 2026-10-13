@@ -189,7 +189,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
     if is_banned(data, update.effective_user.id):
-        await update.message.reply_text("🚫 Aap ban ho chuke ho.\nContact: @dtxzahid")
+        await update.message.reply_text("🚫 Aap ban ho chuke ho.\nContact: @Aarvii_005")
         return
 
     if not await ensure_joined(update, context):
@@ -566,7 +566,7 @@ async def withdraw_method_callback(update: Update, context: ContextTypes.DEFAULT
         return WITHDRAW_UPI
     else:
         await query.edit_message_text(
-            f"🎗️ VSV Withdrawal\n{SEP}\n\nOwner ko direct message karo:\n👉 @dtxzahid"
+            f"🎗️ VSV Withdrawal\n{SEP}\n\nOwner ko direct message karo:\n👉 @Aarvii_005"
         )
         return ConversationHandler.END
 
@@ -660,7 +660,7 @@ async def withdrawal_status_callback(update: Update, context: ContextTypes.DEFAU
         try:
             await context.bot.send_message(
                 chat_id=int(uid),
-                text=f"❌ Withdrawal Reject\n{SEP}\n\n₹{target['amount']:.2f} aapke balance me wapas.\nContact @dtxzahid.",
+                text=f"❌ Withdrawal Reject\n{SEP}\n\n₹{target['amount']:.2f} aapke balance me wapas.\nContact @Aarvii_005.",
                 reply_markup=MAIN_KEYBOARD
             )
         except Exception: pass
@@ -684,7 +684,7 @@ async def get_comment_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🚫 Aapko {hrs} ghante ke liye ban kiya gaya hai.\n\n"
             f"Wajah: Baar baar fake proofs.\n"
-            f"Contact: @dtxzahid"
+            f"Contact: @Aarvii_005"
         )
         return ConversationHandler.END
 
@@ -720,7 +720,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hrs = auto_ban_hours_left(data, uid)
     if hrs > 0:
         await query.edit_message_text(
-            f"🚫 Aapko {hrs} ghante ke liye ban kiya gaya hai.\n\nContact: @dtxzahid"
+            f"🚫 Aapko {hrs} ghante ke liye ban kiya gaya hai.\n\nContact: @Aarvii_005"
         )
         return
 
@@ -745,7 +745,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text(
                 "⚠️ Aapne is app ka comment already le liya hai.\n\n"
-                "Aur comment chahiye toh contact karo: @DTXZAHID"
+                "Aur comment chahiye toh contact karo: @Aarvii_005"
             )
             return
 
@@ -787,7 +787,7 @@ async def user_app_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📸 Screenshot yaha bhejo.\n\n"
             f"⏰ Aapke paas 1 ghante ka time hai.\n"
             f"1 ghante ke baad proof accept nahi hoga.\n"
-            f"Zarurat ho toh contact karo: @dtxzahid"
+            f"Zarurat ho toh contact karo: @Aarvii_005"
         )
     )
     context.user_data["awaiting_proof"] = True
@@ -827,7 +827,7 @@ async def proof_timeout_job(context: ContextTypes.DEFAULT_TYPE):
             text=(
                 f"⏰ Time khatam!\n{SEP}\n\n"
                 f"Aapne 1 ghante me {app_name} ka proof nahi bheja.\n\n"
-                f"Naya comment ke liye contact karo: @dtxzahid"
+                f"Naya comment ke liye contact karo: @Aarvii_005"
             ),
             reply_markup=MAIN_KEYBOARD
         )
@@ -879,7 +879,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pending = data.get("pending_proofs", {})
     if uid not in pending or app_name not in pending[uid]:
         await update.message.reply_text(
-            "⏰ Time khatam ya koi active task nahi.\n\nContact: @dtxzahid",
+            "⏰ Time khatam ya koi active task nahi.\n\nContact: @Aarvii_005",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
@@ -899,7 +899,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             del data["attempts"][uid][app_name]
         save_data(data)
         await update.message.reply_text(
-            "⏰ Time khatam.\n\nContact: @dtxzahid",
+            "⏰ Time khatam.\n\nContact: @Aarvii_005",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
@@ -908,7 +908,7 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if uid in data["proofs"] and app_name in data["proofs"][uid]:
         await update.message.reply_text(
             "❌ Aapne is app ka proof already submit kar diya hai.\n\n"
-            "Galat screenshot tha toh contact: @dtxzahid",
+            "Galat screenshot tha toh contact: @Aarvii_005",
             reply_markup=MAIN_KEYBOARD
         )
         context.user_data["awaiting_proof"] = False
@@ -1011,13 +1011,13 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         f"❌ Saare Attempts Khatam\n\n"
                         f"🚫 Aapko 24 ghante ke liye ban kiya gaya hai.\n"
                         f"Wajah: Baar baar fake proofs.\n"
-                        f"Contact: @dtxzahid"
+                        f"Contact: @Aarvii_005"
                     )
                 else:
                     await update.message.reply_text(
                         f"❌ Saare Attempts Khatam\n\n"
                         f"Ab aap is app ke liye screenshot nahi bhej sakte.\n\n"
-                        f"Dusra app try karo ya contact: @dtxzahid",
+                        f"Dusra app try karo ya contact: @Aarvii_005",
                         reply_markup=MAIN_KEYBOARD
                     )
                 context.user_data["awaiting_proof"] = False
